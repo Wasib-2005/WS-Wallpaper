@@ -1,6 +1,7 @@
 # Python
 __pycache__/
-*.pyc
+**/__pycache__/
+*.py[cod]
 *.pyo
 *.pyd
 *.egg-info/
@@ -15,9 +16,44 @@ env/
 .DS_Store
 Thumbs.db
 *.swp
+*.swo
+*~
 
-# Project-local (in case anyone ever runs it from inside the repo dir)
+# Project-local runtime files
 config.json
 wallpaper.log
 wallpaper.pid
 reload.flag
+*.log
+*.pid
+*.tmp
+*.bak
+*.orig
+
+# Build / packaging artifacts
+build/
+dist/
+out/
+*.apk
+*.aab
+*.exe
+*.zip
+*.tar.gz
+*.whl
+*.class
+
+# Android / Gradle
+Android/.gradle/
+Android/**/build/
+Android/**/*.iml
+Android/local.properties
+Android/.idea/
+Android/.kotlin/
+
+# Windows/Linux local generated files
+Windows/__pycache__/
+Linux/__pycache__/
+**/.pytest_cache/
+
+# Windows packaging output
+/Windows/build-output/

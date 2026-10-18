@@ -1,12 +1,22 @@
-# Wallhaven Wallpaper CLI & Daemon
+# WS Wallpaper
 
-A powerful, customizable CLI tool and background daemon that automatically fetches and applies high-quality desktop wallpapers from [wallhaven.cc](https://wallhaven.cc).
+WS Wallpaper is a cross-platform wallpaper manager that downloads, previews, and applies high-quality wallpapers from [Wallhaven](https://wallhaven.cc). The project includes a native desktop app, a terminal CLI, background rotation service, and platform-specific package/install scripts for Linux, Windows, and Android.
 
-It supports Linux (KDE, GNOME, feh), macOS, and Windows.
+This repository is organized as a multi-platform source tree:
+
+- `Linux/` contains the Linux installer and the GTK/Tk-based desktop app and CLI entrypoints
+- `Windows/` contains the Windows build scripts, startup helper, and packaging logic
+- `Android/` contains the Android app and WorkManager-based rotation scheduler
+- top-level scripts (`install.sh`, `uninstall.sh`) provide the main Linux installation entrypoints
+
+The graphical interface makes it easy to browse your downloaded collection, tune search and content filters, and control automatic wallpaper rotation. The wallpaper CLI can also be used directly on Linux, macOS, and Windows.
 
 ## ✨ Features
 
 - **Advanced Filtering:** Filter by search query, resolution, aspect ratio, purity (SFW/Sketchy/NSFW), and categories.
+- **Desktop GUI:** A desktop-friendly interface for your collection, search preferences, activity, and rotation service on Linux and Windows.
+- **Wallpaper Library:** Preview thumbnails, open images in your desktop viewer, and delete saved wallpapers.
+- **Activity Controls:** Review service activity and clear the log from the app.
 - **Background Daemon:** Run silently in the background and change your wallpaper on a customizable timer.
 - **Immediate Refresh:** Instantly skip to the next wallpaper without waiting for the timer.
 - **Persistent Configuration:** Saves your settings so you don't have to type them every time.
@@ -15,20 +25,115 @@ It supports Linux (KDE, GNOME, feh), macOS, and Windows.
 
 ---
 
-## 🚀 Installation (Linux / macOS)
+## 📁 Repository Layout
 
-A setup script is provided to easily install the tool, add it to your `PATH`, and set it to automatically start on login.
+```text
+Wallpaper Manager/
+├── README.md
+├── install.sh
+├── uninstall.sh
+├── Linux/
+│   ├── setup.sh
+│   ├── wallpaper
+│   ├── wallpaper-manager
+│   ├── ws-wallpaper.png
+│   └── __pycache__/
+├── Windows/
+│   ├── build.ps1
+│   ├── cli_entry.py
+│   ├── gui_entry.py
+│   ├── make_icon.py
+│   ├── startup.py
+│   └── __pycache__/
+├── Android/
+│   ├── app/
+│   ├── build.gradle
+│   ├── gradlew
+│   └── settings.gradle
+└── .github/
+```
 
-1. Clone or download this repository.
-2. Make the scripts executable:
+> Generated build artifacts and local runtime files are intentionally excluded from Git via `.gitignore`.
+
+## 🚀 Installation (Linux)
+
+This project does not ship prebuilt APK, EXE, or Linux `.deb`/`.rpm` packages. Build your own from source using the scripts in this repository.
+
+The installer adds **WS Wallpaper** (with its custom icon) to your applications menu and installs the CLI and background service for your user. Administrator authorization is only needed if it has to install missing system dependencies.
+
+1. Download or clone the repository and open a terminal in its folder:
    ```bash
-   chmod +x setup.sh uninstall.sh wallpaper
+   git clone https://github.com/Wasib-2005/WS-Wallpaper
+   cd WS-Wallpaper
    ```
-3. Run the installer:
+2. Run the installer:
    ```bash
-   ./setup.sh
+   chmod +x install.sh
+   ./install.sh
    ```
-4. *Note: If `wallpaper` is not recognized immediately, restart your terminal or run `source ~/.bashrc` (or `~/.zshrc`).*
+
+The installer detects Debian/Ubuntu, Fedora/RHEL, Arch, and openSUSE. If Python 3, Tkinter, or Pillow with Tk support is missing, it installs them using the system package manager and asks for administrator authorization (`sudo`) when required.
+
+3. Launch **WS Wallpaper** from your applications menu, or run:
+   ```bash
+   ~/.local/bin/ws-wallpaper
+   ```
+
+The installer also provides a `wallpaper` command-line tool. In Preferences, choose a folder for downloaded wallpapers and set the rotation interval in `HH:MM:SS` format (for example, `00:30:00`). New downloads, the Library, cleanup, and offline fallback use the selected folder; existing images are not moved. Pillow provides the in-app wallpaper thumbnails and preview; the installer checks that this dependency is available after installation.
+
+To uninstall:
+```bash
+./uninstall.sh
+```
+
+The CLI can also be used directly as described below.
+
+## Windows
+
+Use the Windows build script to generate a per-user installer or portable package.
+The resulting setup installs WS Wallpaper to the Start menu, can add a desktop
+shortcut, and can start wallpaper rotation when you sign in. No administrator
+access is required. The installer includes the GUI, CLI, and background startup
+helper; Python does not need to be installed on the target PC. Uninstall it from
+Windows Settings or Control Panel. Your settings, logs, and downloaded wallpapers
+are kept.
+
+To build the Windows installer yourself, use a Windows PC with Python 3 and
+Inno Setup 6 installed. From PowerShell at the repository root, run:
+
+```powershell
+.\Windows\build.ps1
+```
+
+This creates `dist\WS-Wallpaper-Setup.exe` and
+`dist\WS-Wallpaper-Windows-portable.zip`. To build just the portable package
+without Inno Setup, run `.\Windows\build.ps1 -PortableOnly`. Both packages
+contain standalone executables built from the same GUI and wallpaper CLI source
+used by Linux. Windows user data is stored in `%APPDATA%\Wallhaven`; wallpapers
+default to the user's `Pictures\Wallhaven` folder.
+
+The Windows build workflow can also be run from the repository's GitHub Actions
+tab; it publishes the installer and portable ZIP as workflow artifacts.
+
+## Android
+
+The native Android app is in `Android/`. It requires JDK 17 and Android SDK
+platform 36. To build a debug APK:
+
+```bash
+cd Android
+./gradlew assembleDebug
+```
+
+The APK is created at `Android/app/build/outputs/apk/debug/app-debug.apk`.
+Install it on a connected device with:
+
+```bash
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+```
+
+Android schedules automatic wallpaper rotation through WorkManager, so the
+system controls the exact execution time and the minimum interval is 15 minutes.
 
 ---
 
@@ -45,12 +150,12 @@ wallpaper -Q "nature"
 
 **Start the background daemon, changing a Cyberpunk wallpaper every 30 minutes:**
 ```bash
-wallpaper -Q "cyberpunk" -T 30 -D
+wallpaper -Q "cyberpunk" -T 30 -d
 ```
 
 **Exclude anime wallpapers, set resolution to 4K, and run in the background:**
 ```bash
-wallpaper -Q "-anime" -R 3840x2160 -D
+wallpaper -Q "-anime" -R 3840x2160 -d
 ```
 
 **Pull from the all-time top-rated wallpapers instead of random:**
@@ -67,7 +172,7 @@ wallpaper -Q "landscape" -R 2560x1440 --set
 
 ## ⚙️ Service & Management Commands
 
-Once the daemon is running in the background (`-D`), you can control it using these commands:
+Once the daemon is running in the background (`-d`), you can control it using these commands:
 
 | Command | Description |
 | :--- | :--- |
@@ -93,7 +198,8 @@ Once the daemon is running in the background (`-D`), you can control it using th
 | `-S` | `--sort` | Sorting method (random, date_added, toplist, etc.). | `-S "random"` |
 | | `--top-range` | Timeframe when `--sort toplist` is used (1d, 3d, 1w, 1M, 3M, 6M, 1y). | `--top-range 1M` |
 | `-K` | `--key` | Wallhaven API Key (Required for NSFW / 001 content). | `-K "your_api_key"` |
-| `-M` | `--keep` | Max downloaded images to keep in `~/Pictures/Wallhaven`. Default: 1. | `-M 5` |
+| `-M` | `--keep` | Max downloaded images to keep in the wallpaper folder. Default: 1. | `-M 5` |
+| | `--save-dir` | Folder for downloaded wallpapers (defaults to `~/Pictures/Wallhaven`). | `--save-dir "~/Pictures/My Wallpapers"` |
 | `-L` | `--max-log-size`| Maximum log file size limit before rotation. | `-L "5MB"` |
 
 > **Note on Clearing Configs:** If you want to reset a saved setting back to default, pass `none` or an empty string. Example: `wallpaper -K none` will remove your saved API key. This also applies to numeric flags like `-M`/`--keep`: passing `-M 0` with `--set` won't persist as "unlimited" — it clears the setting back to the default (`1`) instead. `-M 0` still works for a single one-off run without `--set`.
@@ -102,18 +208,25 @@ Once the daemon is running in the background (`-D`), you can control it using th
 
 ## 📂 File Locations
 
-- **Executable:** `~/.local/bin/wallpaper`
+- **CLI:** `~/.local/bin/wallpaper`
+- **GUI:** `~/.local/bin/ws-wallpaper`
 - **Config & Logs:** `~/.config/wallhaven/`
   - `config.json` (Saved settings)
   - `wallpaper.log` (Service logs)
 - **Wallpapers:** `~/Pictures/Wallhaven/`
+- **Application menu:** `~/.local/share/applications/ws-wallpaper.desktop`
+- **Application icon:** `~/.local/share/icons/hicolor/512x512/apps/ws-wallpaper.png`
 - **Autostart Entry:** `~/.config/autostart/wallhaven-daemon.desktop`
+
+On Windows, the installer places the GUI, CLI, and startup helper under
+`%LOCALAPPDATA%\Programs\WS Wallpaper`, and user settings/logs under
+`%APPDATA%\Wallhaven`.
 
 ---
 
 ## 🗑️ Uninstallation
 
-If you wish to remove the script, autostart entries, and (optionally) your configurations, simply run the included uninstall script:
+If you wish to remove the app, script, and autostart entry, run:
 
 ```bash
 ./uninstall.sh
