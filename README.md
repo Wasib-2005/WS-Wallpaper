@@ -1,27 +1,27 @@
-# WS Wallpaper
+# WS Wallpaper: Wallhaven Wallpaper Downloader and Manager
 
-WS Wallpaper is a cross-platform wallpaper manager that downloads, previews, and applies high-quality wallpapers from [Wallhaven](https://wallhaven.cc). The project includes a native desktop app, a terminal CLI, background rotation service, and platform-specific package/install scripts for Linux, Windows, and Android.
+WS Wallpaper is a free, open-source Wallhaven wallpaper downloader and wallpaper manager for Linux, Windows, and Android. Search Wallhaven, download and organize wallpapers, apply them to your desktop or phone, and automate wallpaper changes with built-in rotation controls.
 
-This repository is organized as a multi-platform source tree:
-
-- `Linux/` contains the Linux installer and the GTK/Tk-based desktop app and CLI entrypoints
-- `Windows/` contains the Windows build scripts, startup helper, and packaging logic
-- `Android/` contains the Android app and WorkManager-based rotation scheduler
-- top-level scripts (`install.sh`, `uninstall.sh`) provide the main Linux installation entrypoints
-
-The graphical interface makes it easy to browse your downloaded collection, tune search and content filters, and control automatic wallpaper rotation. The wallpaper CLI can also be used directly on Linux, macOS, and Windows.
+The project includes a desktop GUI and command-line wallpaper tool for Linux and Windows, plus a native Android app. The CLI also supports macOS. Build installers and apps from source; prebuilt APK, EXE, `.deb`, and `.rpm` packages are not included in this repository.
 
 ## ✨ Features
 
-- **Advanced Filtering:** Filter by search query, resolution, aspect ratio, purity (SFW/Sketchy/NSFW), and categories.
-- **Desktop GUI:** A desktop-friendly interface for your collection, search preferences, activity, and rotation service on Linux and Windows.
+- **Wallhaven Search and Filtering:** Search by keywords and filter by resolution, aspect ratio, purity (SFW/Sketchy/NSFW), and categories.
+- **Desktop GUI:** Browse your collection, tune search preferences, review activity, and control rotation on Linux and Windows.
 - **Wallpaper Library:** Preview thumbnails, open images in your desktop viewer, and delete saved wallpapers.
-- **Activity Controls:** Review service activity and clear the log from the app.
-- **Background Daemon:** Run silently in the background and change your wallpaper on a customizable timer.
-- **Immediate Refresh:** Instantly skip to the next wallpaper without waiting for the timer.
-- **Persistent Configuration:** Saves your settings so you don't have to type them every time.
-- **Automatic Cleanup:** Deletes old wallpapers automatically to save disk space.
-- **Smart Logging:** Built-in log rotation with customizable file size limits.
+- **Automatic Wallpaper Rotation:** Run the background service on a customizable timer, or use Android WorkManager to schedule wallpaper changes.
+- **Immediate Refresh:** Fetch and apply another wallpaper without waiting for the timer.
+- **Persistent Configuration:** Save search, filtering, storage, and rotation settings.
+- **Automatic Cleanup:** Remove old downloads automatically to save disk space.
+- **Smart Logging:** Keep service logs with configurable log rotation.
+- **Command-Line Tool:** Download and apply Wallhaven wallpapers from Linux and Windows; the CLI also supports macOS.
+
+## Project Structure
+
+- `Linux/` contains the Linux installer, desktop GUI, wallpaper CLI, and app icon.
+- `Windows/` contains Windows build scripts, a startup helper, and installer packaging.
+- `Android/` contains the native Android app and WorkManager-based wallpaper rotation.
+- `install.sh` and `uninstall.sh` are the top-level Linux installation scripts.
 
 ---
 
