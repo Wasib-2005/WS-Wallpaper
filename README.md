@@ -36,15 +36,13 @@ Wallpaper Manager/
 │   ├── setup.sh
 │   ├── wallpaper
 │   ├── wallpaper-manager
-│   ├── ws-wallpaper.png
-│   └── __pycache__/
+│   └── ws-wallpaper.png
 ├── Windows/
 │   ├── build.ps1
 │   ├── cli_entry.py
 │   ├── gui_entry.py
 │   ├── make_icon.py
-│   ├── startup.py
-│   └── __pycache__/
+│   └── startup.py
 ├── Android/
 │   ├── app/
 │   ├── build.gradle
