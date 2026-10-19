@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import csv
 import json
 import os
 import platform
@@ -9,16 +10,27 @@ import signal
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
+from collections import deque
 
-# Directory & File Paths
-CONFIG_DIR = os.path.expanduser("~/.config/wallhaven")
+if os.name == "nt":
+    CONFIG_DIR = os.path.join(
+        os.environ.get("APPDATA", os.path.expanduser("~/AppData/Roaming")),
+        "Wallhaven",
+    )
+else:
+    CONFIG_DIR = os.path.expanduser("~/.config/wallhaven")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 LOG_FILE = os.path.join(CONFIG_DIR, "wallpaper.log")
 PID_FILE = os.path.join(CONFIG_DIR, "wallpaper.pid")
 TRIGGER_FILE = os.path.join(CONFIG_DIR, "reload.flag")
 SAVE_DIR = os.path.expanduser("~/Pictures/Wallhaven")
+
+IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp")
+CONFIG_ARG_NAMES = ("key", "query", "resolution", "ratio", "purity", "sort",
+                    "categories", "top_range", "keep", "save_dir")
 
 
 def parse_size_to_bytes(size_str):
@@ -37,7 +49,6 @@ def parse_size_to_bytes(size_str):
             except ValueError:
                 return None
     try:
-        # Fallback if user passes raw numbers (assumes MB)
         return int(float(s) * 1024**2)
     except ValueError:
         return None
@@ -54,11 +65,8 @@ def rotate_log_if_needed():
 
     try:
         if os.path.getsize(LOG_FILE) >= max_bytes:
-            with open(LOG_FILE, "r") as f:
-                lines = f.readlines()
-
-            # Keep only the last 100 log entries
-            retained_lines = lines[-100:]
+            with open(LOG_FILE, "r", errors="replace") as f:
+                retained_lines = list(deque(f, maxlen=100))
             timestamp = time.strftime("[%Y-%m-%d %H:%M:%S]")
             retained_lines.append(f"{timestamp} 🧹 Log exceeded {raw_limit} limit and was truncated.\n")
 
@@ -73,7 +81,7 @@ def log(msg):
     rotate_log_if_needed()
     timestamp = time.strftime("[%Y-%m-%d %H:%M:%S]")
     entry = f"{timestamp} {msg}"
-    print(entry)
+    print(entry, flush=True)
     try:
         os.makedirs(CONFIG_DIR, exist_ok=True)
         with open(LOG_FILE, "a") as f:
@@ -87,7 +95,8 @@ def load_config():
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, "r") as f:
-                return json.load(f)
+                data = json.load(f)
+                return data if isinstance(data, dict) else {}
         except Exception:
             return {}
     return {}
@@ -103,14 +112,50 @@ def save_config(new_settings):
             continue
 
         val_str = str(v).strip().lower()
-        if val_str in ("", "none", "0", "0.0"):
-            current.pop(k, None)  # Delete setting if set to empty or 'none'
+        if val_str in ("", "none"):
+            current.pop(k, None)
         else:
-            current[k] = v
+            current[k] = v if isinstance(v, (int, float)) else str(v).strip()
 
-    with open(CONFIG_FILE, "w") as f:
+    tmp = CONFIG_FILE + ".tmp"
+    with open(tmp, "w") as f:
         json.dump(current, f, indent=4)
+    os.replace(tmp, CONFIG_FILE)
     return current
+
+
+def show_config():
+    """Prints active configuration settings."""
+    config = load_config()
+    print(f"=== Wallhaven Active Configuration ({CONFIG_FILE}) ===")
+    if not config:
+        print("ℹ️ No active configuration saved.")
+        return
+    for k, v in config.items():
+        print(f"  {k}: {v}")
+
+
+def pid_alive(pid):
+    """Cross-platform process liveness check (os.kill(pid, 0) would KILL on Windows)."""
+    if platform.system() == "Windows":
+        try:
+            out = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+                capture_output=True, text=True, timeout=5, check=False,
+            )
+            return any(
+                len(row) > 1 and row[1] == str(pid)
+                for row in csv.reader(out.stdout.splitlines())
+            )
+        except (OSError, subprocess.TimeoutExpired, csv.Error):
+            return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except PermissionError:
+        return True
+    except OSError:
+        return False
 
 
 def get_active_pid():
@@ -119,28 +164,37 @@ def get_active_pid():
         try:
             with open(PID_FILE, "r") as f:
                 pid = int(f.read().strip())
-            os.kill(pid, 0)
-            return pid
+            if pid_alive(pid):
+                return pid
         except (OSError, ValueError):
-            if os.path.exists(PID_FILE):
-                os.remove(PID_FILE)
+            pass
+        try:
+            os.remove(PID_FILE)
+        except OSError:
+            pass
     return None
 
 
 def show_logs(follow=False):
     """Displays log file content."""
     if not os.path.exists(LOG_FILE):
-        print("ℹ️ No log file found yet.")
+        print("ℹ No log file found yet.")
         return
 
     if follow:
         print(f"📡 Streaming logs live ({LOG_FILE}). Press Ctrl+C to stop...\n")
         try:
-            with open(LOG_FILE, "r") as f:
+            with open(LOG_FILE, "r", errors="replace") as f:
                 f.seek(0, os.SEEK_END)
                 while True:
                     line = f.readline()
                     if not line:
+                        try:
+                            # Log was truncated by rotation -> restart from top
+                            if os.path.getsize(LOG_FILE) < f.tell():
+                                f.seek(0)
+                        except OSError:
+                            pass
                         time.sleep(0.5)
                         continue
                     print(line, end="")
@@ -149,9 +203,8 @@ def show_logs(follow=False):
     else:
         print(f"=== Wallhaven Logs ({LOG_FILE}) ===")
         try:
-            with open(LOG_FILE, "r") as f:
-                lines = f.readlines()
-                print("".join(lines[-50:]))
+            with open(LOG_FILE, "r", errors="replace") as f:
+                print("".join(deque(f, maxlen=50)))
         except Exception as e:
             print(f"❌ Error reading logs: {e}")
 
@@ -162,11 +215,15 @@ def stop_daemon():
     if pid:
         try:
             os.kill(pid, signal.SIGTERM)
-            if os.path.exists(PID_FILE):
-                os.remove(PID_FILE)
             log(f"🛑 Stopped background wallpaper service (PID: {pid}).")
         except Exception as e:
             print(f"❌ Failed to stop process: {e}")
+        finally:
+            if os.path.exists(PID_FILE):
+                try:
+                    os.remove(PID_FILE)
+                except OSError:
+                    pass
     else:
         print("ℹ️ No background wallpaper process is currently running.")
 
@@ -199,19 +256,31 @@ def start_daemon():
         time.sleep(0.5)
 
     clean_args = [
-        arg for arg in sys.argv
-        if arg not in ["-D", "--daemon", "-LOG", "--log", "-f", "--follow", "--now", "--status"]
+        arg for arg in sys.argv[1:]
+        if arg not in ["-d", "--daemon", "-LOG", "--log", "-f", "--follow", "--now", "--once", "--status", "-C", "--config"]
     ]
-    cmd = [sys.executable] + clean_args
+    if getattr(sys, "frozen", False):
+        cmd = [sys.executable] + clean_args
+    else:
+        cmd = [sys.executable, sys.argv[0]] + clean_args
+
+    kwargs = {}
+    if platform.system() == "Windows":
+        kwargs["creationflags"] = (
+            subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+        )
+    else:
+        kwargs["start_new_session"] = True
 
     os.makedirs(CONFIG_DIR, exist_ok=True)
-    with open(LOG_FILE, "a") as log_out:
+    # stdout -> DEVNULL: log() already writes to LOG_FILE (avoids duplicate lines)
+    with open(LOG_FILE, "a") as log_err:
         process = subprocess.Popen(
             cmd,
-            stdout=log_out,
-            stderr=log_out,
+            stdout=subprocess.DEVNULL,
+            stderr=log_err,
             stdin=subprocess.DEVNULL,
-            start_new_session=True,
+            **kwargs,
         )
 
     with open(PID_FILE, "w") as f:
@@ -224,18 +293,21 @@ def start_daemon():
 
 def fetch_wallpaper_url(args, config):
     """Fetches wallpaper URL using active config and CLI args."""
-    api_key = args.key.strip() if args.key is not None else config.get("api_key", "").strip()
-    query = args.query.strip() if args.query is not None else config.get("query", "")
+    raw_key = args.key if args.key is not None else config.get("api_key", "")
+    api_key = str(raw_key).strip()
 
-    res_arg = args.resolution if args.resolution is not None else config.get("resolution", "1920x1080")
+    raw_query = args.query if args.query is not None else config.get("query", "")
+    query = str(raw_query).strip()
+
+    res_arg = str(args.resolution if args.resolution is not None else config.get("resolution", "1920x1080")).strip()
     resolution = res_arg.replace("*", "x")
 
-    ratio = args.ratio if args.ratio is not None else config.get("ratio", "16x9,16x10,21x9")
+    ratio = str(args.ratio if args.ratio is not None else config.get("ratio", "16x9,16x10,21x9")).strip()
 
     params = {
-        "categories": args.categories if args.categories is not None else config.get("categories", "111"),
-        "purity": args.purity if args.purity is not None else config.get("purity", "100"),
-        "sorting": args.sort if args.sort is not None else config.get("sort", "random"),
+        "categories": str(args.categories if args.categories is not None else config.get("categories", "111")).strip(),
+        "purity": str(args.purity if args.purity is not None else config.get("purity", "100")).strip(),
+        "sorting": str(args.sort if args.sort is not None else config.get("sort", "random")).strip(),
         "order": "desc",
         "atleast": resolution,
         "ratios": ratio,
@@ -248,7 +320,7 @@ def fetch_wallpaper_url(args, config):
         params["q"] = query
 
     if params["sorting"] == "toplist":
-        params["topRange"] = args.top_range if args.top_range is not None else config.get("top_range", "1M")
+        params["topRange"] = str(args.top_range if args.top_range is not None else config.get("top_range", "1M")).strip()
 
     url = f"https://wallhaven.cc/api/v1/search?{urllib.parse.urlencode(params)}"
 
@@ -258,7 +330,7 @@ def fetch_wallpaper_url(args, config):
     )
 
     try:
-        with urllib.request.urlopen(req) as response:
+        with urllib.request.urlopen(req, timeout=10) as response:
             data = json.loads(response.read().decode("utf-8"))
             wallpapers = data.get("data", [])
 
@@ -277,25 +349,49 @@ def fetch_wallpaper_url(args, config):
     except urllib.error.HTTPError as e:
         if e.code == 401:
             log("❌ HTTP 401 Unauthorized: Invalid or missing API Key for NSFW content.")
+        elif e.code == 429:
+            log("❌ HTTP 429: Rate limited by Wallhaven. Try a longer timer.")
         else:
             log(f"❌ Wallhaven API Error: HTTP {e.code}")
         return None, None
     except Exception as e:
-        log(f"❌ Error communicating with Wallhaven API: {e}")
+        log(f"🌐 Offline or network issue communicating with Wallhaven API: {e}")
         return None, None
 
 
 def download_image(url, save_path):
+    """Downloads to a temp file first so a failed download never leaves a corrupt wallpaper."""
     log(f"📥 Downloading: {url}")
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-    with urllib.request.urlopen(req) as response, open(save_path, "wb") as f:
-        f.write(response.read())
+    tmp_path = save_path + ".part"
+    try:
+        with urllib.request.urlopen(req, timeout=30) as response, open(tmp_path, "wb") as f:
+            while True:
+                chunk = response.read(64 * 1024)
+                if not chunk:
+                    break
+                f.write(chunk)
+        os.replace(tmp_path, save_path)
+    except Exception:
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+        raise
 
 
 def cleanup_old_wallpapers(max_keep):
-    if max_keep <= 0: return
+    """Deletes oldest downloaded wallpapers (only our own 'wallhaven-*' files)."""
+    if max_keep <= 0:
+        return
     try:
-        files = [os.path.join(SAVE_DIR, f) for f in os.listdir(SAVE_DIR) if os.path.isfile(os.path.join(SAVE_DIR, f))]
+        files = [
+            os.path.join(SAVE_DIR, f) for f in os.listdir(SAVE_DIR)
+            if f.startswith("wallhaven-")
+            and f.lower().endswith(IMAGE_EXTS)
+            and os.path.isfile(os.path.join(SAVE_DIR, f))
+        ]
         files.sort(key=os.path.getmtime, reverse=True)
         for old_file in files[max_keep:]:
             os.remove(old_file)
@@ -304,13 +400,39 @@ def cleanup_old_wallpapers(max_keep):
         log(f"⚠️ Cleanup error: {e}")
 
 
+def apply_local_wallpaper():
+    """Selects a random image from the local save directory and sets it as wallpaper."""
+    if not os.path.exists(SAVE_DIR):
+        log("⚠️ Local folder does not exist. Cannot set wallpaper offline.")
+        return
+
+    local_files = [
+        os.path.join(SAVE_DIR, f) for f in os.listdir(SAVE_DIR)
+        if os.path.isfile(os.path.join(SAVE_DIR, f)) and f.lower().endswith(IMAGE_EXTS)
+    ]
+
+    if not local_files:
+        log("⚠️ No saved wallpapers found locally to pick from.")
+        return
+
+    chosen_file = random.choice(local_files)
+    log(f"📴 Offline fallback: Using local wallpaper '{os.path.basename(chosen_file)}'.")
+    set_desktop_wallpaper(chosen_file)
+
+
 def set_desktop_wallpaper(image_path):
     os_name = platform.system()
     abs_path = os.path.abspath(image_path)
 
     if os_name == "Windows":
         import ctypes
-        ctypes.windll.user32.SystemParametersInfoW(20, 0, abs_path, 3)
+        system_parameters_info = ctypes.windll.user32.SystemParametersInfoW
+        system_parameters_info.argtypes = (
+            ctypes.c_uint, ctypes.c_uint, ctypes.c_wchar_p, ctypes.c_uint,
+        )
+        system_parameters_info.restype = ctypes.c_bool
+        if not system_parameters_info(20, 0, abs_path, 3):
+            raise ctypes.WinError()
         log("🖥️ Wallpaper applied (Windows).")
 
     elif os_name == "Darwin":
@@ -341,12 +463,17 @@ def set_desktop_wallpaper(image_path):
             """
             for qdbus_cmd in ["qdbus", "qdbus6", "qdbus-qt6", "qdbus-qt5"]:
                 try:
-                    res = subprocess.run([qdbus_cmd, "org.kde.plasmashell", "/PlasmaShell", "org.kde.PlasmaShell.evaluateScript", script], capture_output=True)
+                    res = subprocess.run(
+                        [qdbus_cmd, "org.kde.plasmashell", "/PlasmaShell",
+                         "org.kde.PlasmaShell.evaluateScript", script],
+                        capture_output=True,
+                    )
                     if res.returncode == 0:
                         log(f"🖥️ Wallpaper applied (KDE - {qdbus_cmd}).")
                         return
                 except FileNotFoundError:
                     continue
+            log("⚠️ Could not apply wallpaper on KDE (no working method). Saved locally.")
 
         elif "gnome" in desktop_env or "ubuntu" in desktop_env:
             uri = f"file://{abs_path}"
@@ -358,26 +485,51 @@ def set_desktop_wallpaper(image_path):
                 subprocess.run(["feh", "--bg-fill", abs_path])
                 log("🖥️ Wallpaper applied (feh).")
             except FileNotFoundError:
-                log("⚠️ Saved wallpaper locally.")
+                log("⚠️ Saved wallpaper locally (no supported desktop/feh found).")
 
 
 def run_cycle(args, config):
+    global SAVE_DIR
+    configured_dir = config.get("save_dir")
+    SAVE_DIR = os.path.abspath(os.path.expanduser(str(configured_dir))) if configured_dir else os.path.expanduser("~/Pictures/Wallhaven")
     os.makedirs(SAVE_DIR, exist_ok=True)
     img_url, filename = fetch_wallpaper_url(args, config)
 
+    # Resolve max keep limit: CLI arg > saved config > default 1
+    if args.keep is not None:
+        keep_limit = args.keep
+    else:
+        try:
+            keep_limit = int(config.get("keep", 1))
+        except (TypeError, ValueError):
+            keep_limit = 1
+
     if img_url and filename:
         file_path = os.path.join(SAVE_DIR, filename)
-        download_image(img_url, file_path)
-        set_desktop_wallpaper(file_path)
-        cleanup_old_wallpapers(args.keep)
+        try:
+            download_image(img_url, file_path)
+            set_desktop_wallpaper(file_path)
+            cleanup_old_wallpapers(keep_limit)
+        except Exception as e:
+            log(f"❌ Failed to download wallpaper: {e}")
+            apply_local_wallpaper()
+    else:
+        apply_local_wallpaper()
+
+
+def clear_trigger():
+    if os.path.exists(TRIGGER_FILE):
+        try:
+            os.remove(TRIGGER_FILE)
+        except OSError:
+            pass
 
 
 def interruptible_sleep(seconds):
     end_time = time.time() + seconds
     while time.time() < end_time:
         if os.path.exists(TRIGGER_FILE):
-            try: os.remove(TRIGGER_FILE)
-            except OSError: pass
+            clear_trigger()
             return True
         time.sleep(0.5)
     return False
@@ -402,7 +554,7 @@ Examples: '1920x1080', '2560x1440', '3840x2160'""")
 Examples: '16x9', '21x9', '16x9,21x9,16x10'""")
 
     parser.add_argument("-K", "--key", type=str, default=None, help="""Your Wallhaven API Key.
-(Required if you want to view NSFW/001 content)""")
+Pass "" or "none" to remove key.""")
 
     parser.add_argument("-P", "--purity", type=str, default=None, help="""Purity bitmask (SFW / Sketchy / NSFW).
   100 = SFW only (Default)
@@ -412,7 +564,7 @@ Examples: '16x9', '21x9', '16x9,21x9,16x10'""")
   110 = SFW + Sketchy
   101 = SFW + NSFW""")
 
-    parser.add_argument("-C", "--categories", type=str, default=None, help="""Category bitmask (General / Anime / People).
+    parser.add_argument("-cat", "--categories", type=str, default=None, help="""Category bitmask (General / Anime / People).
   100 = General only
   010 = Anime only
   001 = People only
@@ -425,30 +577,42 @@ Options: random, date_added, relevance, views, favorites, toplist, hot""")
     parser.add_argument("--top-range", type=str, default=None, help="""Timeframe if sort is 'toplist'.
 Options: 1d, 3d, 1w, 1M, 3M, 6M, 1y""")
 
-    parser.add_argument("-M", "--keep", type=int, default=1, help="""Max downloaded images to keep in folder.
+    parser.add_argument("-M", "--keep", type=int, default=None, help="""Max downloaded images to keep in folder.
 (Default: 1 - Automatically deletes old wallpapers)""")
+
+    parser.add_argument("--save-dir", type=str, default=None, help="Folder to save downloaded wallpapers in.")
 
     parser.add_argument("-L", "--max-log-size", type=str, default=None, help="""Maximum log file size limit.
 Examples: '500KB', '1MB', '5MB' (Default), '1GB', 'none'""")
 
     # Service & Management Flags
     service_group = parser.add_argument_group('Service & Management Commands')
-    service_group.add_argument("-D", "--daemon", action="store_true", help="Run as a background service using your timer")
+    service_group.add_argument("-d", "--daemon", action="store_true", help="Run as a background service using your timer")
     service_group.add_argument("-LOG", "--log", action="store_true", help="Show recent background service logs")
     service_group.add_argument("-f", "--follow", action="store_true", help="Live stream the background service logs")
     service_group.add_argument("--now", action="store_true", help="Force running background service to change wallpaper NOW")
+    service_group.add_argument("--once", action="store_true", help="Fetch and apply one wallpaper, regardless of saved timer")
     service_group.add_argument("--set", action="store_true", help="Only save passed arguments to config (don't run)")
     service_group.add_argument("--stop", action="store_true", help="Stop the background service")
     service_group.add_argument("--status", action="store_true", help="Check if the background service is running")
+    service_group.add_argument("-C", "--config", action="store_true", help="Display active configuration settings")
 
     args = parser.parse_args()
 
     def handle_sighup(signum, frame):
+        os.makedirs(CONFIG_DIR, exist_ok=True)
         open(TRIGGER_FILE, "w").close()
+
+    def handle_sigterm(signum, frame):
+        raise SystemExit(0)
 
     if hasattr(signal, "SIGHUP"):
         signal.signal(signal.SIGHUP, handle_sighup)
+    signal.signal(signal.SIGTERM, handle_sigterm)
 
+    if args.config:
+        show_config()
+        sys.exit(0)
     if args.log:
         show_logs(follow=args.follow)
         sys.exit(0)
@@ -460,8 +624,10 @@ Examples: '500KB', '1MB', '5MB' (Default), '1GB', 'none'""")
         sys.exit(0)
     if args.status:
         pid = get_active_pid()
-        if pid: print(f"🟢 Wallpaper service is RUNNING in background (PID: {pid}).")
-        else: print("🔴 Wallpaper service is STOPPED.")
+        if pid:
+            print(f"🟢 Wallpaper service is RUNNING in background (PID: {pid}).")
+        else:
+            print("🔴 Wallpaper service is STOPPED.")
         sys.exit(0)
 
     # Save to config if explicit CLI flags were passed
@@ -475,6 +641,13 @@ Examples: '500KB', '1MB', '5MB' (Default), '1GB', 'none'""")
     if args.sort is not None: new_cfg["sort"] = args.sort
     if args.categories is not None: new_cfg["categories"] = args.categories
     if args.top_range is not None: new_cfg["top_range"] = args.top_range
+    if args.keep is not None: new_cfg["keep"] = args.keep
+    if args.save_dir is not None:
+        save_dir_value = args.save_dir.strip()
+        new_cfg["save_dir"] = (
+            "none" if save_dir_value.lower() in ("", "none")
+            else os.path.abspath(os.path.expanduser(save_dir_value))
+        )
 
     if args.max_log_size is not None:
         parsed = parse_size_to_bytes(args.max_log_size)
@@ -491,24 +664,49 @@ Examples: '500KB', '1MB', '5MB' (Default), '1GB', 'none'""")
     else:
         config = load_config()
 
+    # Config file is now the single source of truth. Clearing CLI values stops
+    # a long-running daemon from ignoring later `--set` changes.
+    cli_timer = args.timer
+    for name in CONFIG_ARG_NAMES:
+        setattr(args, name, None)
+
+    if args.once:
+        run_cycle(args, config)
+        sys.exit(0)
+
+    def current_timer(cfg):
+        try:
+            t = float(cfg.get("timer", 0) or 0)
+        except (TypeError, ValueError):
+            t = 0.0
+        if t <= 0 and cli_timer is not None and cli_timer > 0:
+            t = cli_timer
+        return t
+
+    timer_val = current_timer(config)
+
     if args.daemon:
+        if timer_val <= 0:
+            print("⚠️ No timer set; daemon would exit after one run. Use -T <minutes> with -d.")
+            sys.exit(1)
         start_daemon()
 
-    timer_val = args.timer if (args.timer is not None and args.timer > 0) else float(config.get("timer", 0.0))
-
     if timer_val > 0:
-        sleep_seconds = timer_val * 60
-        log(f"🔄 Wallpaper service running (Timer: {timer_val}m / {sleep_seconds:.1f}s).")
+        log(f"🔄 Wallpaper service running (Timer: {timer_val}m / {timer_val * 60:.1f}s).")
+        clear_trigger()
         try:
             while True:
                 active_config = load_config()
+                clear_trigger()
                 run_cycle(args, active_config)
-                interrupted = interruptible_sleep(sleep_seconds)
-                if interrupted: log("⚡ Immediate refresh requested via trigger.")
-        except KeyboardInterrupt:
+                sleep_seconds = (current_timer(active_config) or timer_val) * 60
+                if interruptible_sleep(sleep_seconds):
+                    log("⚡ Immediate refresh requested via trigger.")
+        except (KeyboardInterrupt, SystemExit):
             log("👋 Wallpaper service stopped.")
     else:
         run_cycle(args, config)
+
 
 if __name__ == "__main__":
     main()

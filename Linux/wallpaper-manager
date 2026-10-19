@@ -1,0 +1,1059 @@
+#!/usr/bin/env python3
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+import threading
+import tkinter as tk
+from collections import deque
+from tkinter import filedialog, messagebox, ttk
+
+
+if os.name == "nt":
+    CONFIG_DIR = os.path.join(
+        os.environ.get("APPDATA", os.path.expanduser("~/AppData/Roaming")),
+        "Wallhaven",
+    )
+else:
+    CONFIG_DIR = os.path.expanduser("~/.config/wallhaven")
+CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
+LOG_FILE = os.path.join(CONFIG_DIR, "wallpaper.log")
+SAVE_DIR = os.path.expanduser("~/Pictures/Wallhaven")
+IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp")
+
+BG = "#101512"
+SIDEBAR = "#151d19"
+CARD = "#1c2621"
+CARD_ALT = "#222e27"
+ACCENT = "#c0ff3e"
+CYAN = "#22d3ee"
+TEXT = "#f2f6f3"
+MUTED = "#9aa89e"
+BORDER = "#2a3930"
+
+
+def find_cli():
+    if getattr(sys, "frozen", False):
+        app_dir = os.path.dirname(sys.executable)
+        sibling = os.path.join(app_dir, "wallpaper.exe" if os.name == "nt" else "wallpaper")
+        if os.path.isfile(sibling):
+            return sibling
+    else:
+        sibling = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wallpaper")
+        if os.path.isfile(sibling):
+            return sibling
+    installed = shutil.which("wallpaper")
+    if installed:
+        return installed
+    raise FileNotFoundError("Could not find the 'wallpaper' command beside this app or on PATH.")
+
+
+class WallpaperManager:
+    def __init__(self, root):
+        self.root = root
+        self.cli = find_cli()
+        self.config = self.load_config()
+        configured_dir = self.config.get("save_dir", SAVE_DIR)
+        self.save_dir = os.path.abspath(os.path.expanduser(str(configured_dir)))
+        self.page = "Overview"
+        self.scroll_canvas = None
+        self.service_check_running = False
+        self.status_text = tk.StringVar(value="Ready")
+        self.service_text = tk.StringVar(value="Checking service…")
+        self.purity_vars = {}
+        self.category_vars = {}
+
+        root.title("WS Wallpaper")
+        root.geometry("1120x760")
+        root.minsize(900, 640)
+        root.configure(bg=BG)
+        self.configure_styles()
+        self.set_window_icon()
+        self.build_shell()
+        for sequence in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            self.root.bind_all(sequence, self.on_mousewheel, add="+")
+        self.show_page("Overview")
+        self.root.after(5000, self.poll_service)
+
+    def configure_styles(self):
+        style = ttk.Style()
+        style.theme_use("clam")
+        style.configure("TCombobox", fieldbackground=CARD_ALT, background=CARD_ALT,
+                        foreground=TEXT, arrowcolor=ACCENT, bordercolor=BORDER,
+                        lightcolor=BORDER, darkcolor=BORDER, padding=9)
+        style.map("TCombobox", fieldbackground=[("readonly", CARD_ALT)],
+                  foreground=[("readonly", TEXT)])
+        style.configure("Vertical.TScrollbar", background=CARD_ALT,
+                        troughcolor=BG, arrowcolor=MUTED, bordercolor=BG)
+
+    def icon_path(self):
+        candidates = (
+            os.path.join(
+                os.path.expanduser("~/.local/share/icons/hicolor/512x512/apps"),
+                "ws-wallpaper.png",
+            ),
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "ws-wallpaper.png"),
+        )
+        return next((path for path in candidates if os.path.isfile(path)), None)
+
+    def set_window_icon(self):
+        path = self.icon_path()
+        if path is None:
+            return
+        try:
+            from PIL import Image, ImageTk
+            with Image.open(path) as image:
+                self.window_icon = ImageTk.PhotoImage(image.resize((64, 64)))
+            self.root.iconphoto(True, self.window_icon)
+        except (OSError, tk.TclError) as error:
+            self.status_text.set(f"Could not load app icon: {error}")
+
+    def load_config(self):
+        if not os.path.exists(CONFIG_FILE):
+            return {}
+        try:
+            with open(CONFIG_FILE, "r", encoding="utf-8") as config_file:
+                config = json.load(config_file)
+        except (OSError, json.JSONDecodeError) as error:
+            raise RuntimeError(f"Could not read settings at {CONFIG_FILE}: {error}") from error
+        if not isinstance(config, dict):
+            raise RuntimeError(f"Settings file at {CONFIG_FILE} must contain a JSON object.")
+        return config
+
+    def build_shell(self):
+        shell = tk.Frame(self.root, bg=BG)
+        shell.pack(fill="both", expand=True)
+
+        sidebar = tk.Frame(shell, bg=SIDEBAR, width=230)
+        sidebar.pack(side="left", fill="y")
+        sidebar.pack_propagate(False)
+        brand = tk.Frame(sidebar, bg=SIDEBAR)
+        brand.pack(anchor="w", padx=20, pady=(24, 28))
+        icon_path = self.icon_path()
+        if icon_path:
+            try:
+                from PIL import Image, ImageTk
+                with Image.open(icon_path) as image:
+                    self.brand_icon = ImageTk.PhotoImage(image.resize((46, 46)))
+                tk.Label(brand, image=self.brand_icon, bg=SIDEBAR).pack(side="left", padx=(0, 10))
+            except (OSError, tk.TclError):
+                pass
+        brand_text = tk.Frame(brand, bg=SIDEBAR)
+        brand_text.pack(side="left")
+        tk.Label(brand_text, text="WS", bg=SIDEBAR, fg=ACCENT,
+                 font=("TkDefaultFont", 15, "bold")).pack(anchor="w")
+        tk.Label(brand_text, text="WALLPAPER", bg=SIDEBAR, fg=CYAN,
+                 font=("TkDefaultFont", 9, "bold")).pack(anchor="w")
+        tk.Label(sidebar, text="Your desktop,\nyour style.", bg=SIDEBAR, fg=TEXT,
+                 justify="left", font=("TkDefaultFont", 19, "bold")).pack(anchor="w", padx=25, pady=(0, 32))
+
+        self.nav_buttons = {}
+        for name, icon in (("Overview", "⌂"), ("Library", "▧"),
+                           ("Preferences", "⚙"), ("Activity", "≡")):
+            button = tk.Button(
+                sidebar, text=f"  {icon}   {name}", anchor="w", relief="flat",
+                bd=0, padx=16, pady=12, cursor="hand2", font=("TkDefaultFont", 11),
+                command=lambda page=name: self.show_page(page),
+            )
+            button.pack(fill="x", padx=14, pady=3)
+            self.nav_buttons[name] = button
+
+        spacer = tk.Frame(sidebar, bg=SIDEBAR)
+        spacer.pack(fill="both", expand=True)
+        tk.Label(sidebar, text="WALLHAVEN.CC", bg=SIDEBAR, fg=MUTED,
+                 font=("TkDefaultFont", 9, "bold")).pack(anchor="w", padx=25, pady=(0, 4))
+        tk.Label(sidebar, text="A little more you.", bg=SIDEBAR, fg=MUTED,
+                 font=("TkDefaultFont", 9)).pack(anchor="w", padx=25, pady=(0, 24))
+
+        content = tk.Frame(shell, bg=BG)
+        content.pack(side="left", fill="both", expand=True)
+        header = tk.Frame(content, bg=BG)
+        header.pack(fill="x", padx=34, pady=(24, 14))
+        self.page_title = tk.Label(header, text="", bg=BG, fg=TEXT,
+                                   font=("TkDefaultFont", 22, "bold"))
+        self.page_title.pack(side="left")
+        self.status_pill = tk.Label(header, textvariable=self.status_text,
+                                    bg=CARD, fg=MUTED, padx=13, pady=7,
+                                    font=("TkDefaultFont", 9, "bold"))
+        self.status_pill.pack(side="right")
+        self.body = tk.Frame(content, bg=BG)
+        self.body.pack(fill="both", expand=True, padx=34, pady=(0, 24))
+
+    def show_page(self, name):
+        self.disable_mousewheel_scroll()
+        self.page = name
+        for child in self.body.winfo_children():
+            child.destroy()
+        self.page_title.configure(text=name)
+        for nav_name, button in self.nav_buttons.items():
+            active = nav_name == name
+            button.configure(bg=CARD_ALT if active else SIDEBAR,
+                             fg=ACCENT if active else MUTED,
+                             activebackground=CARD_ALT, activeforeground=TEXT)
+        if name == "Overview":
+            self.build_overview()
+        elif name == "Library":
+            self.build_library()
+        elif name == "Preferences":
+            self.build_preferences()
+        else:
+            self.build_activity()
+        if name == "Overview":
+            self.refresh_overview()
+
+    def card(self, parent, **kwargs):
+        return tk.Frame(parent, bg=CARD, highlightthickness=1,
+                        highlightbackground=BORDER, **kwargs)
+
+    def label(self, parent, text, *, color=TEXT, size=10, bold=False, **kwargs):
+        return tk.Label(parent, text=text, bg=parent.cget("bg"), fg=color,
+                        font=("TkDefaultFont", size, "bold" if bold else "normal"),
+                        **kwargs)
+
+    def button(self, parent, text, command, *, primary=False, compact=False):
+        return tk.Button(
+            parent, text=text, command=command, relief="flat", bd=0,
+            bg=ACCENT if primary else CARD_ALT,
+            fg="#162015" if primary else TEXT,
+            activebackground="#c9f99b" if primary else BORDER,
+            activeforeground="#162015" if primary else TEXT,
+            cursor="hand2", padx=16 if not compact else 11,
+            pady=10 if not compact else 7,
+            font=("TkDefaultFont", 10, "bold"),
+        )
+
+    def build_overview(self):
+        top = tk.Frame(self.body, bg=BG)
+        top.pack(fill="x", pady=(0, 16))
+        greeting = self.card(top)
+        greeting.pack(side="left", fill="both", expand=True, padx=(0, 8))
+        self.label(greeting, "YOUR DESKTOP, REIMAGINED", color=ACCENT,
+                   size=9, bold=True).pack(anchor="w", padx=22, pady=(20, 8))
+        self.label(greeting, "Find your next\nfavorite view.", size=22,
+                   bold=True, justify="left").pack(anchor="w", padx=22)
+        self.label(greeting, "Discover beautiful wallpapers from Wallhaven.",
+                   color=MUTED, size=10).pack(anchor="w", padx=22, pady=(8, 18))
+        self.button(greeting, "Change wallpaper  →", self.change_now,
+                    primary=True).pack(anchor="w", padx=22, pady=(0, 20))
+
+        service = self.card(top, width=245)
+        service.pack(side="right", fill="y")
+        service.pack_propagate(False)
+        self.label(service, "AUTOMATIC ROTATION", color=MUTED,
+                   size=9, bold=True).pack(anchor="w", padx=18, pady=(20, 8))
+        self.service_label = tk.Label(service, textvariable=self.service_text,
+                                      bg=CARD, fg=TEXT, font=("TkDefaultFont", 15, "bold"))
+        self.service_label.pack(anchor="w", padx=18, pady=(0, 6))
+        self.schedule_label = tk.Label(service, text="", bg=CARD, fg=MUTED,
+                                       font=("TkDefaultFont", 9))
+        self.schedule_label.pack(anchor="w", padx=18, pady=(0, 16))
+        self.button(service, "Manage rotation", lambda: self.show_page("Preferences"),
+                    compact=True).pack(anchor="w", padx=18, pady=(0, 18))
+
+        library = self.card(self.body)
+        library.pack(fill="both", expand=True, pady=(0, 15))
+        title_row = tk.Frame(library, bg=CARD)
+        title_row.pack(fill="x", padx=20, pady=(18, 12))
+        self.label(title_row, "Your wallpaper collection", size=13, bold=True).pack(side="left")
+        self.label(title_row, "Saved locally", color=MUTED, size=9).pack(side="right")
+        self.preview_area = tk.Frame(library, bg=CARD, height=280)
+        self.preview_area.pack(fill="both", expand=True, padx=20, pady=(0, 12))
+        self.preview_area.pack_propagate(False)
+        self.preview_label = tk.Label(self.preview_area, bg=CARD_ALT, fg=MUTED,
+                                      text="No wallpapers saved yet\n\nChoose “Change wallpaper” to discover your first one.",
+                                      font=("TkDefaultFont", 11), justify="center")
+        self.preview_label.pack(fill="both", expand=True)
+        footer = tk.Frame(library, bg=CARD)
+        footer.pack(fill="x", padx=20, pady=(0, 17))
+        self.collection_label = self.label(footer, "", color=MUTED, size=9)
+        self.collection_label.pack(side="left")
+        self.button(footer, "Open library", lambda: self.show_page("Library"),
+                    compact=True).pack(side="right")
+
+        stats = tk.Frame(self.body, bg=BG)
+        stats.pack(fill="x")
+        self.stat_count = self.stat_card(stats, "IN YOUR LIBRARY", "0 wallpapers")
+        self.stat_schedule = self.stat_card(stats, "ROTATION FREQUENCY", "Not scheduled")
+        self.stat_quality = self.stat_card(stats, "IMAGE QUALITY", "1920 × 1080")
+        for item in (self.stat_count, self.stat_schedule, self.stat_quality):
+            item.pack(side="left", fill="x", expand=True, padx=(0, 10))
+
+    def stat_card(self, parent, title, value):
+        frame = self.card(parent)
+        self.label(frame, title, color=MUTED, size=8, bold=True).pack(anchor="w", padx=16, pady=(13, 5))
+        value_label = self.label(frame, value, size=11, bold=True)
+        value_label.pack(anchor="w", padx=16, pady=(0, 13))
+        return frame
+
+    def refresh_overview(self):
+        if self.page != "Overview":
+            return
+        images = self.images()
+        count = len(images)
+        self.collection_label.configure(text=f"{count} saved wallpaper{'s' if count != 1 else ''}")
+        self.stat_count.winfo_children()[-1].configure(text=f"{count} wallpaper{'s' if count != 1 else ''}")
+        timer = self.config.get("timer")
+        try:
+            timer_text = f"Every {float(timer):g} minutes" if timer and float(timer) > 0 else "Not scheduled"
+        except (TypeError, ValueError):
+            timer_text = "Not scheduled"
+        self.stat_schedule.winfo_children()[-1].configure(text=timer_text)
+        resolution = str(self.config.get("resolution", "1920x1080")).replace("x", " × ")
+        self.stat_quality.winfo_children()[-1].configure(text=resolution)
+        self.schedule_label.configure(text=timer_text)
+        if images:
+            current = images[0]
+            self.preview_label.configure(
+                image="", text=f"✦  LATEST WALLPAPER\n\n{os.path.basename(current)}\n\n{self.human_size(os.path.getsize(current))}  ·  {count} saved",
+                bg=CARD_ALT, fg=TEXT, font=("TkDefaultFont", 12, "bold"),
+            )
+            self.preview_label.image = None
+            try:
+                from PIL import Image, ImageTk
+                with Image.open(current) as image:
+                    image.thumbnail((850, 280))
+                    photo = ImageTk.PhotoImage(image)
+                self.preview_label.configure(image=photo, text="", bg=CARD)
+                self.preview_label.image = photo
+            except ImportError:
+                pass
+            except OSError:
+                self.preview_label.configure(text=f"Latest wallpaper\n\n{os.path.basename(current)}",
+                                             image="", bg=CARD_ALT)
+
+    def images(self):
+        if not os.path.isdir(self.save_dir):
+            return []
+        try:
+            paths = [
+                os.path.join(self.save_dir, name) for name in os.listdir(self.save_dir)
+                if name.lower().endswith(IMAGE_EXTS)
+                and os.path.isfile(os.path.join(self.save_dir, name))
+            ]
+        except OSError as error:
+            self.status_text.set(f"Could not read library: {error}")
+            return []
+        return sorted(paths, key=os.path.getmtime, reverse=True)
+
+    @staticmethod
+    def human_size(size):
+        if size >= 1024 * 1024:
+            return f"{size / (1024 * 1024):.1f} MB"
+        return f"{size / 1024:.0f} KB"
+
+    def enable_canvas_scroll(self, canvas, content, window_id):
+        self.scroll_canvas = canvas
+        content.bind(
+            "<Configure>",
+            lambda _event: canvas.configure(scrollregion=canvas.bbox("all")),
+        )
+        canvas.bind(
+            "<Configure>",
+            lambda event: canvas.itemconfigure(window_id, width=event.width),
+        )
+    def disable_mousewheel_scroll(self):
+        self.scroll_canvas = None
+
+    def on_mousewheel(self, event):
+        canvas = self.scroll_canvas
+        if canvas is None or not canvas.winfo_exists():
+            return
+        pointer_x, pointer_y = self.root.winfo_pointerxy()
+        left, top = canvas.winfo_rootx(), canvas.winfo_rooty()
+        if not (left <= pointer_x < left + canvas.winfo_width()
+                and top <= pointer_y < top + canvas.winfo_height()):
+            return
+        if getattr(event, "num", None) == 4:
+            units = -1
+        elif getattr(event, "num", None) == 5:
+            units = 1
+        else:
+            delta = getattr(event, "delta", 0)
+            units = -1 if delta > 0 else 1
+            if abs(delta) >= 120:
+                units *= max(1, abs(delta) // 120)
+        canvas.yview_scroll(units, "units")
+        return "break"
+
+    def build_library(self):
+        intro = self.label(self.body, "Wallpapers you’ve downloaded are kept on your device.",
+                           color=MUTED, size=10)
+        intro.pack(anchor="w", pady=(0, 15))
+        tools = tk.Frame(self.body, bg=BG)
+        tools.pack(fill="x", pady=(0, 10))
+        self.label(tools, self.save_dir, color=MUTED, size=9).pack(side="left")
+        self.button(tools, "Open folder", self.open_library, compact=True).pack(side="right")
+        panel = self.card(self.body)
+        panel.pack(fill="both", expand=True)
+        images = self.images()
+        if not images:
+            self.label(panel, "Your collection is empty.\n\nUse “Change wallpaper” to find something you love.",
+                       color=MUTED, size=11, justify="center").pack(expand=True)
+            return
+        self.label(panel, "Preview a wallpaper or delete it from your collection.",
+                   color=MUTED, size=9).pack(anchor="w", padx=16, pady=(12, 0))
+        canvas = tk.Canvas(panel, bg=CARD, highlightthickness=0)
+        scroll = ttk.Scrollbar(panel, orient="vertical", command=canvas.yview)
+        rows = tk.Frame(canvas, bg=CARD)
+        window_id = canvas.create_window((0, 0), window=rows, anchor="nw")
+        self.enable_canvas_scroll(canvas, rows, window_id)
+        canvas.configure(yscrollcommand=scroll.set)
+        canvas.pack(side="left", fill="both", expand=True, padx=(14, 0), pady=12)
+        scroll.pack(side="right", fill="y", padx=(0, 10), pady=12)
+        pillow_available = True
+        try:
+            from PIL import Image, ImageTk
+        except ImportError:
+            pillow_available = False
+            self.status_text.set("Install Pillow to show wallpaper thumbnails")
+        for path in images:
+            row = tk.Frame(rows, bg=CARD_ALT)
+            row.pack(fill="x", pady=5, padx=4)
+            thumbnail = tk.Label(
+                row,
+                text="▧" if pillow_available else "Install Pillow\nto show preview",
+                bg=CARD, fg=ACCENT if pillow_available else MUTED,
+                width=18, height=5, font=("TkDefaultFont", 10 if not pillow_available else 18),
+            )
+            thumbnail.pack(side="left", padx=12, pady=10)
+            if pillow_available:
+                try:
+                    with Image.open(path) as image:
+                        image.thumbnail((150, 84))
+                        photo = ImageTk.PhotoImage(image)
+                    thumbnail.configure(image=photo, text="", width=150, height=84)
+                    thumbnail.image = photo
+                except OSError:
+                    thumbnail.configure(text="Image unavailable")
+            detail = tk.Frame(row, bg=CARD_ALT)
+            detail.pack(side="left", fill="x", expand=True, pady=11)
+            tk.Label(detail, text=os.path.basename(path), bg=CARD_ALT, fg=TEXT,
+                     font=("TkDefaultFont", 10, "bold")).pack(anchor="w")
+            try:
+                image_details = f"{self.human_size(os.path.getsize(path))}  ·  {self.image_dimensions(path)}"
+            except OSError:
+                image_details = "File details unavailable"
+            tk.Label(detail, text=image_details, bg=CARD_ALT,
+                     fg=MUTED, font=("TkDefaultFont", 9)).pack(anchor="w", pady=(3, 0))
+            self.button(row, "Delete", lambda image=path: self.delete_image(image),
+                        compact=True).pack(side="right", padx=(4, 12), pady=10)
+            self.button(row, "Open", lambda image=path: self.open_image(image),
+                        compact=True).pack(side="right", padx=4, pady=10)
+
+    @staticmethod
+    def image_dimensions(path):
+        try:
+            from PIL import Image
+        except ImportError:
+            return "image"
+        with Image.open(path) as image:
+            return f"{image.width} × {image.height}"
+
+    def show_wallpaper(self, path):
+        try:
+            from PIL import Image, ImageTk
+        except ImportError:
+            self.open_image(path)
+            return
+
+        try:
+            with Image.open(path) as image:
+                original_size = image.size
+                image.thumbnail((1000, 700))
+                photo = ImageTk.PhotoImage(image)
+        except OSError as error:
+            messagebox.showerror("Could not show wallpaper", str(error), parent=self.root)
+            return
+
+        preview = tk.Toplevel(self.root)
+        preview.title(os.path.basename(path))
+        preview.configure(bg=BG)
+        preview.transient(self.root)
+        preview.geometry(f"{max(500, photo.width() + 40)}x{max(360, photo.height() + 90)}")
+        tk.Label(preview, text=os.path.basename(path), bg=BG, fg=TEXT,
+                 font=("TkDefaultFont", 11, "bold")).pack(padx=18, pady=(14, 3))
+        tk.Label(preview, text=f"{original_size[0]} × {original_size[1]}  ·  {self.human_size(os.path.getsize(path))}",
+                 bg=BG, fg=MUTED, font=("TkDefaultFont", 9)).pack(pady=(0, 12))
+        image_label = tk.Label(preview, image=photo, bg=BG)
+        image_label.image = photo
+        image_label.pack(padx=18, pady=(0, 18), expand=True)
+
+    def delete_image(self, path):
+        if not messagebox.askyesno(
+            "Delete wallpaper?",
+            f"Delete {os.path.basename(path)} from your library?\n\nThis cannot be undone.",
+            parent=self.root,
+        ):
+            return
+        try:
+            os.remove(path)
+        except OSError as error:
+            messagebox.showerror("Could not delete wallpaper", str(error), parent=self.root)
+            return
+        self.status_text.set(f"Deleted {os.path.basename(path)}")
+        self.show_page("Library")
+
+    def build_preferences(self):
+        canvas = tk.Canvas(self.body, bg=BG, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(self.body, orient="vertical", command=canvas.yview)
+        form = tk.Frame(canvas, bg=BG)
+        window_id = canvas.create_window((0, 0), window=form, anchor="nw")
+        self.enable_canvas_scroll(canvas, form, window_id)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        tk.Label(form, text="Tune what shows up on your desktop.", bg=BG, fg=MUTED,
+                 font=("TkDefaultFont", 10)).pack(anchor="w", pady=(0, 15))
+        search = self.card(form)
+        search.pack(fill="x", pady=(0, 12))
+        self.section_heading(search, "DISCOVERY", "Search Wallhaven and choose your preferred image quality.")
+        grid = tk.Frame(search, bg=CARD)
+        grid.pack(fill="x", padx=20, pady=(0, 18))
+        self.query_var = tk.StringVar(value=self.config.get("query", ""))
+        self.resolution_var = tk.StringVar(value=self.config.get("resolution", "1920x1080"))
+        self.ratio_var = tk.StringVar(value=self.config.get("ratio", "16x9,16x10,21x9"))
+        self.sort_var = tk.StringVar(value=self.config.get("sort", "random"))
+        self.top_range_var = tk.StringVar(value=self.config.get("top_range", "1M"))
+        self.add_entry(grid, "Search terms", self.query_var, 0, 0, 2)
+        self.add_entry(grid, "Minimum resolution", self.resolution_var, 0, 2)
+        self.add_entry(grid, "Aspect ratios", self.ratio_var, 1, 0, 2)
+        self.add_combo(grid, "Sort by", self.sort_var,
+                       ("random", "date_added", "relevance", "views", "favorites", "toplist", "hot"), 1, 2)
+        self.add_combo(grid, "Toplist range", self.top_range_var,
+                       ("1d", "3d", "1w", "1M", "3M", "6M", "1y"), 2, 0)
+
+        safe = self.card(form)
+        safe.pack(fill="x", pady=(0, 12))
+        self.section_heading(safe, "CONTENT FILTERS", "Choose which categories can appear.")
+        checks = tk.Frame(safe, bg=CARD)
+        checks.pack(fill="x", padx=20, pady=(0, 16))
+        self.purity_vars = self.add_checks(checks, "Content", ("SFW", "Sketchy", "NSFW"),
+                                           self.config.get("purity", "100"))
+        self.category_vars = self.add_checks(checks, "Categories", ("General", "Anime", "People"),
+                                             self.config.get("categories", "111"))
+        self.key_var = tk.StringVar(value=self.config.get("api_key", ""))
+        key_frame = tk.Frame(safe, bg=CARD)
+        key_frame.pack(fill="x", padx=20, pady=(0, 18))
+        self.add_entry(key_frame, "Wallhaven API key (needed for NSFW)", self.key_var, 0, 0, 1, secret=True)
+
+        rotation = self.card(form)
+        rotation.pack(fill="x", pady=(0, 12))
+        self.section_heading(rotation, "STORAGE & ROTATION", "Choose where wallpapers are saved and how often your desktop changes.")
+        controls = tk.Frame(rotation, bg=CARD)
+        controls.pack(fill="x", padx=20, pady=(0, 18))
+        self.timer_vars = [
+            tk.StringVar(value=part)
+            for part in self.format_timer(self.config.get("timer", 30)).split(":")
+        ]
+        self.keep_var = tk.StringVar(value=str(self.config.get("keep", "5")))
+        self.add_clock_input(controls, "Change every (HH:MM:SS)", self.timer_vars, 0, 0)
+        self.add_entry(controls, "Keep downloaded images", self.keep_var, 0, 1)
+        self.save_dir_var = tk.StringVar(value=self.save_dir)
+        folder_field = tk.Frame(rotation, bg=CARD)
+        folder_field.pack(fill="x", padx=20, pady=(0, 16))
+        folder_label = tk.Label(folder_field, text="Wallpaper folder", bg=CARD, fg=MUTED,
+                                font=("TkDefaultFont", 9))
+        folder_label.pack(anchor="w", pady=(0, 6))
+        folder_controls = tk.Frame(folder_field, bg=CARD)
+        folder_controls.pack(fill="x")
+        folder_entry = tk.Entry(
+            folder_controls, textvariable=self.save_dir_var, bg=CARD_ALT, fg=TEXT,
+            insertbackground=ACCENT, relief="flat", bd=0,
+            highlightthickness=1, highlightbackground=BORDER,
+            highlightcolor=ACCENT, font=("TkDefaultFont", 10),
+        )
+        folder_entry.pack(side="left", fill="x", expand=True, ipady=9, padx=(1, 8))
+        self.button(folder_controls, "Browse…", self.browse_save_dir,
+                    compact=True).pack(side="right")
+        self.label(rotation, "Use hours:minutes:seconds, for example 00:30:00.",
+                   color=MUTED, size=9).pack(anchor="w", padx=20, pady=(0, 16))
+
+        actions = tk.Frame(form, bg=BG)
+        actions.pack(fill="x", pady=(3, 12))
+        self.button(actions, "Save preferences", self.save_preferences, primary=True).pack(side="left")
+        self.button(actions, "Start rotation", self.start_service).pack(side="left", padx=(9, 0))
+        self.button(actions, "Stop rotation", self.stop_service).pack(side="left", padx=(9, 0))
+
+    def section_heading(self, parent, title, subtitle):
+        self.label(parent, title, color=ACCENT, size=9, bold=True).pack(anchor="w", padx=20, pady=(16, 4))
+        self.label(parent, subtitle, color=MUTED, size=9).pack(anchor="w", padx=20, pady=(0, 14))
+
+    def add_entry(self, parent, title, variable, row, column, span=1, secret=False):
+        field = tk.Frame(parent, bg=CARD)
+        field.grid(row=row, column=column, columnspan=span, sticky="ew", padx=5, pady=5)
+        parent.grid_columnconfigure(column, weight=1)
+        tk.Label(field, text=title, bg=CARD, fg=MUTED,
+                 font=("TkDefaultFont", 9)).pack(anchor="w", pady=(0, 6))
+        entry = tk.Entry(field, textvariable=variable, bg=CARD_ALT, fg=TEXT,
+                         insertbackground=ACCENT, relief="flat", bd=0,
+                         highlightthickness=1, highlightbackground=BORDER,
+                         highlightcolor=ACCENT, font=("TkDefaultFont", 10),
+                         show="●" if secret else "")
+        entry.pack(fill="x", ipady=9, padx=1)
+
+    def browse_save_dir(self):
+        initial_dir = os.path.expanduser(self.save_dir_var.get() or SAVE_DIR)
+        desktop = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
+        chooser = shutil.which("kdialog") if "kde" in desktop else None
+        chooser = chooser or shutil.which("zenity")
+        chooser = chooser or shutil.which("kdialog")
+
+        try:
+            if chooser:
+                if os.path.basename(chooser) == "kdialog":
+                    command = [
+                        chooser, "--getexistingdirectory", initial_dir,
+                        "--title", "Choose wallpaper folder",
+                    ]
+                else:
+                    command = [
+                        chooser, "--file-selection", "--directory",
+                        "--title=Choose wallpaper folder",
+                        f"--filename={initial_dir.rstrip(os.sep)}/",
+                    ]
+                result = subprocess.run(
+                    command, capture_output=True, text=True, timeout=300, check=False,
+                )
+                if result.returncode == 1:
+                    return
+                if result.returncode != 0:
+                    raise RuntimeError(
+                        result.stderr.strip() or "The desktop folder chooser could not open."
+                    )
+                selected = result.stdout.strip()
+            else:
+                selected = filedialog.askdirectory(
+                    parent=self.root,
+                    title="Choose wallpaper folder",
+                    initialdir=initial_dir,
+                    mustexist=False,
+                )
+        except (OSError, subprocess.TimeoutExpired, RuntimeError) as error:
+            messagebox.showerror("Could not open folder chooser", str(error), parent=self.root)
+            return
+
+        if selected:
+            self.save_dir_var.set(selected)
+
+    def add_clock_input(self, parent, title, variables, row, column):
+        field = tk.Frame(parent, bg=CARD)
+        field.grid(row=row, column=column, sticky="w", padx=5, pady=5)
+        tk.Label(field, text=title, bg=CARD, fg=MUTED,
+                 font=("TkDefaultFont", 9)).pack(anchor="w", pady=(0, 6))
+        clock = tk.Frame(field, bg=CARD)
+        clock.pack(anchor="w")
+        self.clock_fields = []
+        for index, variable in enumerate(variables):
+            entry = tk.Entry(
+                clock, width=4 if index == 0 else 2, textvariable=variable,
+                justify="center",
+                bg=CARD_ALT, fg=TEXT, insertbackground=ACCENT,
+                relief="flat", bd=0,
+                highlightthickness=1, highlightbackground=BORDER,
+                highlightcolor=ACCENT, font=("TkFixedFont", 12),
+            )
+            entry.pack(side="left", ipady=8)
+            self.clock_fields.append(entry)
+            entry.bind("<FocusIn>", lambda event: event.widget.selection_range(0, "end"))
+            entry.bind(
+                "<FocusOut>",
+                lambda _event, part=index: self.normalize_clock_segment(part),
+            )
+            entry.bind(
+                "<KeyRelease>",
+                lambda event, part=index: self.advance_clock_on_complete(event, part),
+            )
+            entry.bind("<Return>", lambda _event, part=index: self.focus_clock_segment(part + 1))
+            entry.bind(
+                "<Up>",
+                lambda _event, part=index: self.step_clock_segment(part, 1),
+            )
+            entry.bind(
+                "<Down>",
+                lambda _event, part=index: self.step_clock_segment(part, -1),
+            )
+            if index < len(variables) - 1:
+                tk.Label(clock, text=":", bg=CARD, fg=CYAN,
+                         font=("TkFixedFont", 13, "bold")).pack(side="left", padx=5)
+        for entry in self.clock_fields:
+            entry.bind(
+                "<Left>",
+                lambda _event, current=entry: self.focus_adjacent_clock_segment(current, -1),
+            )
+            entry.bind(
+                "<Right>",
+                lambda _event, current=entry: self.focus_adjacent_clock_segment(current, 1),
+            )
+        parent.grid_columnconfigure(column, weight=1)
+
+    def normalize_clock_segment(self, index):
+        value = self.timer_vars[index].get().strip()
+        if value.isascii() and value.isdigit():
+            self.timer_vars[index].set(value.zfill(2))
+        elif not value:
+            self.timer_vars[index].set("00")
+
+    def step_clock_segment(self, index, amount):
+        value = self.timer_vars[index].get().strip()
+        if not value.isascii() or not value.isdigit():
+            value = "0"
+        maximum = 999999 if index == 0 else 59
+        updated = (int(value) + amount) % (maximum + 1)
+        self.timer_vars[index].set(f"{updated:02d}")
+        return "break"
+
+    def advance_clock_on_complete(self, event, index):
+        if event.keysym in ("Left", "Right", "Up", "Down", "Tab", "Return"):
+            return
+        value = self.timer_vars[index].get()
+        if value.isascii() and value.isdigit() and len(value) >= 2:
+            self.normalize_clock_segment(index)
+            self.focus_clock_segment(index + 1)
+
+    def focus_clock_segment(self, index):
+        if index < len(self.clock_fields):
+            next_field = self.clock_fields[index]
+            next_field.focus_set()
+            next_field.selection_range(0, "end")
+
+    def focus_adjacent_clock_segment(self, current, direction):
+        try:
+            index = self.clock_fields.index(current)
+        except ValueError:
+            return
+        next_index = index + direction
+        if 0 <= next_index < len(self.clock_fields):
+            self.normalize_clock_segment(index)
+            self.focus_clock_segment(next_index)
+            return "break"
+
+    def add_combo(self, parent, title, variable, values, row, column):
+        field = tk.Frame(parent, bg=CARD)
+        field.grid(row=row, column=column, sticky="ew", padx=5, pady=5)
+        parent.grid_columnconfigure(column, weight=1)
+        tk.Label(field, text=title, bg=CARD, fg=MUTED,
+                 font=("TkDefaultFont", 9)).pack(anchor="w", pady=(0, 6))
+        ttk.Combobox(field, textvariable=variable, values=values,
+                     state="readonly").pack(fill="x")
+
+    def add_checks(self, parent, title, labels, value):
+        frame = tk.Frame(parent, bg=CARD)
+        frame.pack(side="left", fill="x", expand=True)
+        self.label(frame, title, color=MUTED, size=9).pack(anchor="w", pady=(0, 6))
+        bits = str(value).zfill(3)
+        variables = {}
+        for index, label in enumerate(labels):
+            var = tk.BooleanVar(value=index < len(bits) and bits[index] == "1")
+            check = tk.Checkbutton(
+                frame, text=label, variable=var, bg=CARD, fg=TEXT,
+                activebackground=CARD, activeforeground=ACCENT, selectcolor=CARD_ALT,
+                font=("TkDefaultFont", 9), relief="flat", highlightthickness=0,
+            )
+            check.pack(side="left", padx=(0, 12))
+            variables[label] = var
+        return variables
+
+    def build_activity(self):
+        header = tk.Frame(self.body, bg=BG)
+        header.pack(fill="x", pady=(0, 12))
+        self.label(header, "Recent service events and wallpaper downloads.",
+                   color=MUTED, size=10).pack(side="left")
+        actions = tk.Frame(header, bg=BG)
+        actions.pack(side="right")
+        self.button(actions, "Clear activity", self.clear_activity,
+                    compact=True).pack(side="left", padx=(0, 8))
+        self.button(actions, "Refresh", self.refresh_logs, compact=True).pack(side="left")
+        log_frame = self.card(self.body)
+        log_frame.pack(fill="both", expand=True)
+        self.log_text = tk.Text(log_frame, bg=CARD, fg=TEXT, insertbackground=ACCENT,
+                                relief="flat", padx=16, pady=14, wrap="word",
+                                font=("TkFixedFont", 9), state="disabled")
+        log_scroll = ttk.Scrollbar(log_frame, orient="vertical", command=self.log_text.yview)
+        self.log_text.configure(yscrollcommand=log_scroll.set)
+        self.log_text.pack(side="left", fill="both", expand=True, padx=(2, 0), pady=2)
+        log_scroll.pack(side="right", fill="y", padx=(0, 2), pady=2)
+        self.refresh_logs()
+
+    def clear_activity(self):
+        if not messagebox.askyesno(
+            "Clear activity?",
+            "Delete all saved activity log entries?\n\nThis cannot be undone.",
+            parent=self.root,
+        ):
+            return
+        try:
+            os.makedirs(CONFIG_DIR, exist_ok=True)
+            with open(LOG_FILE, "w", encoding="utf-8"):
+                pass
+        except OSError as error:
+            messagebox.showerror("Could not clear activity", str(error), parent=self.root)
+            return
+        self.status_text.set("Activity cleared")
+        self.refresh_logs()
+
+    def refresh_logs(self):
+        try:
+            if not os.path.isfile(LOG_FILE):
+                text = "Nothing here yet. Recent wallpaper activity will show up once the service runs."
+            else:
+                with open(LOG_FILE, "r", encoding="utf-8", errors="replace") as log_file:
+                    text = "".join(deque(log_file, maxlen=150)).strip() or "No activity recorded yet."
+        except OSError as error:
+            text = f"Could not read the activity log: {error}"
+        if hasattr(self, "log_text") and self.log_text.winfo_exists():
+            self.log_text.configure(state="normal")
+            self.log_text.delete("1.0", "end")
+            self.log_text.insert("1.0", text)
+            self.log_text.configure(state="disabled")
+
+    def get_preferences(self):
+        try:
+            timer = self.parse_timer(":".join(variable.get() for variable in self.timer_vars))
+            keep = int(self.keep_var.get())
+        except ValueError as error:
+            raise ValueError(
+                "Enter rotation time as HH:MM:SS (for example, 00:30:00) and image count as a whole number."
+            ) from error
+        if keep < 0:
+            raise ValueError("Image count cannot be negative.")
+        purity = "".join("1" if self.purity_vars[name].get() else "0"
+                         for name in ("SFW", "Sketchy", "NSFW"))
+        categories = "".join("1" if self.category_vars[name].get() else "0"
+                             for name in ("General", "Anime", "People"))
+        if "1" not in purity or "1" not in categories:
+            raise ValueError("Select at least one content filter and one category.")
+        save_dir = os.path.abspath(os.path.expanduser(self.save_dir_var.get().strip()))
+        if not self.save_dir_var.get().strip():
+            raise ValueError("Choose a folder for downloaded wallpapers.")
+        return [
+            ("--query", self.query_var.get().strip()),
+            ("--resolution", self.resolution_var.get().strip()),
+            ("--ratio", self.ratio_var.get().strip()),
+            ("--sort", self.sort_var.get()),
+            ("--top-range", self.top_range_var.get()),
+            ("--purity", purity),
+            ("--categories", categories),
+            ("--key", self.key_var.get().strip()),
+            ("--timer", str(timer)),
+            ("--keep", str(keep)),
+            ("--save-dir", save_dir),
+        ]
+
+    @staticmethod
+    def parse_timer(value):
+        parts = value.strip().split(":")
+        if (len(parts) != 3 or len(parts[0]) < 2 or len(parts[1]) != 2
+                or len(parts[2]) != 2
+                or any(not part.isascii() or not part.isdigit() for part in parts)):
+            raise ValueError("Rotation time must use HH:MM:SS.")
+        hours, minutes, seconds = (int(part) for part in parts)
+        if minutes > 59 or seconds > 59:
+            raise ValueError("Minutes and seconds must be between 00 and 59.")
+        total_seconds = hours * 3600 + minutes * 60 + seconds
+        if total_seconds == 0:
+            raise ValueError("Rotation time must be greater than 00:00:00.")
+        return total_seconds / 60
+
+    @staticmethod
+    def format_timer(value):
+        try:
+            total_seconds = max(1, round(float(value) * 60))
+        except (TypeError, ValueError, OverflowError):
+            total_seconds = 1800
+        hours, remainder = divmod(total_seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+    def save_preferences(self):
+        try:
+            options = self.get_preferences()
+        except ValueError as error:
+            messagebox.showerror("Check your preferences", str(error), parent=self.root)
+            return
+        args = [part for key, value in options for part in (key, value)] + ["--set"]
+        def done(_output):
+            self.config = self.load_config()
+            self.save_dir = os.path.abspath(os.path.expanduser(
+                str(self.config.get("save_dir", SAVE_DIR))
+            ))
+            self.status_text.set("Preferences saved")
+            self.show_page("Preferences")
+            self.refresh_overview()
+            messagebox.showinfo("Saved", "Your preferences have been saved.", parent=self.root)
+        self.run_cli(args, "Saving preferences…", done)
+
+    def change_now(self):
+        self.run_cli(["--status"], "Checking wallpaper service…",
+                     lambda output: self._change_now(output))
+
+    def _change_now(self, output):
+        if "RUNNING" in output:
+            self.run_cli(["--now"], "Asking the service for a new wallpaper…",
+                         lambda _result: self.refresh_after_request())
+        else:
+            self.run_cli(["--once"], "Finding and applying a wallpaper…",
+                         self.after_action)
+
+    def refresh_after_request(self):
+        self.status_text.set("Wallpaper refresh requested")
+        self.root.after(3000, self.refresh_overview)
+
+    def start_service(self):
+        try:
+            options = self.get_preferences()
+        except ValueError as error:
+            messagebox.showerror("Check your preferences", str(error), parent=self.root)
+            return
+        args = [part for key, value in options for part in (key, value)] + ["--daemon"]
+        self.run_cli(args, "Starting automatic rotation…",
+                     lambda _output: self.save_service_settings())
+
+    def stop_service(self):
+        self.run_cli(["--stop"], "Stopping automatic rotation…",
+                     lambda _output: self.set_service_state(False))
+
+    def set_service_state(self, running):
+        self.status_text.set("Rotation started" if running else "Rotation stopped")
+        self.refresh_service()
+
+    def run_cli(self, args, message, on_success=None):
+        self.status_text.set(message)
+
+        def work():
+            try:
+                options = {}
+                if os.name == "nt":
+                    options["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                result = subprocess.run([self.cli, *args], capture_output=True,
+                                        text=True, timeout=45, check=False, **options)
+                output = (result.stdout + result.stderr).strip()
+                if result.returncode != 0:
+                    raise RuntimeError(output or f"Command exited with status {result.returncode}.")
+                self.root.after(0, lambda: self.command_succeeded(output, on_success))
+            except (OSError, subprocess.TimeoutExpired, RuntimeError) as error:
+                self.root.after(0, lambda error=error: self.command_failed(error))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def command_succeeded(self, output, on_success):
+        self.status_text.set("Ready")
+        if on_success:
+            on_success(output)
+        self.refresh_service()
+        self.refresh_overview()
+
+    def command_failed(self, error):
+        self.status_text.set("Action failed")
+        messagebox.showerror("Wallpaper Manager", str(error), parent=self.root)
+
+    def after_action(self, output):
+        if "❌" in output or "⚠️" in output:
+            self.status_text.set("Wallpaper action completed with a warning; see Activity")
+            messagebox.showwarning(
+                "Wallpaper action completed with a warning",
+                "The wallpaper command reported an issue. Check Activity for details.",
+                parent=self.root,
+            )
+        else:
+            self.status_text.set("Wallpaper updated")
+
+    def save_service_settings(self):
+        self.config = self.load_config()
+        self.save_dir = os.path.abspath(os.path.expanduser(
+            str(self.config.get("save_dir", SAVE_DIR))
+        ))
+        self.set_service_state(True)
+
+    def refresh_service(self):
+        if self.service_check_running:
+            return
+        self.service_check_running = True
+
+        def work():
+            try:
+                options = {}
+                if os.name == "nt":
+                    options["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                result = subprocess.run([self.cli, "--status"], capture_output=True,
+                                        text=True, timeout=10, check=False, **options)
+                output = result.stdout + result.stderr
+                running = "RUNNING" in output
+                error = output.strip() if result.returncode != 0 else None
+            except (OSError, subprocess.TimeoutExpired) as caught:
+                running, error = False, str(caught)
+            self.root.after(0, lambda: self.update_service(running, error))
+        threading.Thread(target=work, daemon=True).start()
+
+    def update_service(self, running, error):
+        self.service_check_running = False
+        if hasattr(self, "service_text"):
+            self.service_text.set("Running" if running else "Not running")
+            self.service_label.configure(fg=ACCENT if running else MUTED)
+        if error:
+            self.status_text.set(error)
+
+    def poll_service(self):
+        self.refresh_service()
+        if self.page == "Activity":
+            self.refresh_logs()
+        self.root.after(5000, self.poll_service)
+
+    def open_library(self):
+        try:
+            os.makedirs(self.save_dir, exist_ok=True)
+        except OSError as error:
+            messagebox.showerror("Could not open wallpaper folder", str(error), parent=self.root)
+            return
+        self.open_path(self.save_dir)
+
+    def open_image(self, path):
+        if os.name == "nt":
+            try:
+                os.startfile(path)
+            except OSError as error:
+                messagebox.showerror(
+                    "Could not show wallpaper",
+                    f"No image viewer could be opened for this file:\n{error}",
+                    parent=self.root,
+                )
+            return
+        try:
+            subprocess.Popen(["xdg-open", path], stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True)
+        except OSError as error:
+            messagebox.showerror(
+                "Could not show wallpaper",
+                f"No image viewer could be opened for this file:\n{error}",
+                parent=self.root,
+            )
+
+    @staticmethod
+    def open_path(path):
+        if os.name == "nt":
+            try:
+                os.startfile(path)
+            except OSError as error:
+                messagebox.showerror("Could not open", str(error))
+            return
+        try:
+            subprocess.Popen(["xdg-open", path], stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True)
+        except OSError as error:
+            messagebox.showerror("Could not open", str(error))
+
+
+def main():
+    try:
+        root = tk.Tk()
+        WallpaperManager(root)
+        root.mainloop()
+    except (FileNotFoundError, RuntimeError) as error:
+        messagebox.showerror("Wallpaper Manager", str(error))
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

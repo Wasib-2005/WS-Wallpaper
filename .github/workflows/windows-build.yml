@@ -1,0 +1,30 @@
+name: Windows build
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Inno Setup
+        run: choco install innosetup --yes --no-progress
+      - name: Build Windows executables and installer
+        shell: pwsh
+        run: .\Windows\build.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WS-Wallpaper-Windows
+          path: |
+            dist/WS-Wallpaper-Setup.exe
+            dist/WS-Wallpaper-Windows-portable.zip
