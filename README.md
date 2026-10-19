@@ -1,5 +1,9 @@
 # WS Wallpaper: Wallhaven Wallpaper Downloader and Manager
 
+<p align="center">
+  <img src="Linux/ws-wallpaper.png" alt="WS Wallpaper app icon" width="160">
+</p>
+
 WS Wallpaper is a free, open-source Wallhaven wallpaper downloader and wallpaper manager for Linux, Windows, and Android. Search Wallhaven, download and organize wallpapers, apply them to your desktop or phone, and automate wallpaper changes with built-in rotation controls.
 
 The project includes a desktop GUI and command-line wallpaper tool for Linux and Windows, plus a native Android app. The CLI also supports macOS. Build installers and apps from source; prebuilt APK, EXE, `.deb`, and `.rpm` packages are not included in this repository.
