@@ -5,7 +5,7 @@
 [Setup]
 AppId={{D64A7B9E-02CF-4AD9-9A52-2CDCB9046D5B}
 AppName=WS Wallpaper
-AppVersion=1.0.0.0
+AppVersion=1.0.0.1
 AppPublisher=WS Wallpaper
 DefaultDirName={localappdata}\Programs\WS Wallpaper
 DefaultGroupName=WS Wallpaper

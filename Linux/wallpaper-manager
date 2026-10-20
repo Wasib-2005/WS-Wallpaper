@@ -15,14 +15,12 @@ from collections import deque
 from tkinter import filedialog, messagebox, ttk
 
 
-APP_VERSION = "1.0.0.0"
+APP_VERSION = "1.0.0.1"
 RELEASE_API_URL = (
-    "https://api.github.com/repos/Wasib-2005/"
-    "Wallpaper-Manager---For-Wallhaven/releases/latest"
+    "https://api.github.com/repos/Wasib-2005/WS-Wallpaper/releases/latest"
 )
 RELEASES_URL = (
-    "https://github.com/Wasib-2005/"
-    "Wallpaper-Manager---For-Wallhaven/releases"
+    "https://github.com/Wasib-2005/WS-Wallpaper/releases"
 )
 
 if os.name == "nt":

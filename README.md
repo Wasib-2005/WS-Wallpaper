@@ -8,7 +8,7 @@ WS Wallpaper is a free, open-source Wallhaven wallpaper downloader and wallpaper
 
 The project includes a desktop GUI and command-line wallpaper tool for Linux and Windows, plus a native Android app. The CLI also supports macOS. Build installers and apps from source; prebuilt APK, EXE, `.deb`, and `.rpm` packages are not included in this repository.
 
-The current desktop app version is **1.0.0.0**. The app checks GitHub for newer
+The current desktop app version is **1.0.0.1**. The app checks GitHub for newer
 releases at startup and provides a manual **Check for updates** action. A new
 version opens its GitHub release page; updates are not installed automatically.
 Pushing a `v*` tag builds and publishes Windows installer and portable assets
