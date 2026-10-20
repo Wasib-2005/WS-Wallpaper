@@ -4,11 +4,11 @@
   <img src="Linux/ws-wallpaper.png" alt="WS Wallpaper app icon" width="160">
 </p>
 
-WS Wallpaper is a free, open-source Wallhaven wallpaper downloader and wallpaper manager for Linux, Windows, and Android. Search Wallhaven, download and organize wallpapers, apply them to your desktop or phone, and automate wallpaper changes with built-in rotation controls.
+WS Wallpaper is a free, open-source wallpaper manager for Linux, Windows, and Android. Search Wallhaven or Pixabay, download and organize wallpapers, apply them to your desktop or phone, and automate wallpaper changes with built-in rotation controls.
 
 The project includes a desktop GUI and command-line wallpaper tool for Linux and Windows, plus a native Android app. The CLI also supports macOS. Build installers and apps from source; prebuilt APK, EXE, `.deb`, and `.rpm` packages are not included in this repository.
 
-The current desktop app version is **1.0.0.1**. The app checks GitHub for newer
+The current desktop app version is **1.0.0.2**. The app checks GitHub for newer
 releases at startup and provides a manual **Check for updates** action. A new
 version opens its GitHub release page; updates are not installed automatically.
 Pushing a `v*` tag builds and publishes Windows installer and portable assets
@@ -17,6 +17,7 @@ through GitHub Actions.
 ## ✨ Features
 
 - **Wallhaven Search and Filtering:** Search by keywords and filter by resolution, aspect ratio, purity (SFW/Sketchy/NSFW), and categories.
+- **Pixabay Source:** Optionally search safe, landscape photos with your Pixabay API key.
 - **Desktop GUI:** Browse your collection, tune search preferences, review activity, and control rotation on Linux and Windows.
 - **Wallpaper Library:** Preview thumbnails, open images in your desktop viewer, and delete saved wallpapers.
 - **Automatic Wallpaper Rotation:** Run the background service on a customizable timer, or use Android WorkManager to schedule wallpaper changes.
@@ -25,7 +26,7 @@ through GitHub Actions.
 - **Version Checks:** Check GitHub releases at startup or manually from the app.
 - **Automatic Cleanup:** Remove old downloads automatically to save disk space.
 - **Smart Logging:** Keep service logs with configurable log rotation.
-- **Command-Line Tool:** Download and apply Wallhaven wallpapers from Linux and Windows; the CLI also supports macOS.
+- **Command-Line Tool:** Download and apply Wallhaven or Pixabay wallpapers from Linux and Windows; the CLI also supports macOS.
 
 ## Project Structure
 
@@ -196,6 +197,12 @@ Once the daemon is running in the background (`-d`), you can control it using th
 
 ## 🛠️ Configuration Options
 
+In the desktop app's **Preferences**, select **Pixabay** as the wallpaper source
+and enter your Pixabay API key. Get a key from
+[Pixabay API documentation](https://pixabay.com/api/docs/). Pixabay search
+responses are cached for 24 hours, and photo attribution is recorded in
+Activity. Wallhaven remains the default source.
+
 | Flag | Name | Description | Example |
 | :--- | :--- | :--- | :--- |
 | `-Q` | `--query` | Search term(s). Use `-` to exclude (e.g., `-anime`). | `-Q "cars"` |
@@ -207,6 +214,8 @@ Once the daemon is running in the background (`-d`), you can control it using th
 | `-S` | `--sort` | Sorting method (random, date_added, toplist, etc.). | `-S "random"` |
 | | `--top-range` | Timeframe when `--sort toplist` is used (1d, 3d, 1w, 1M, 3M, 6M, 1y). | `--top-range 1M` |
 | `-K` | `--key` | Wallhaven API Key (Required for NSFW / 001 content). | `-K "your_api_key"` |
+| | `--source` | Wallpaper source (`wallhaven` or `pixabay`). | `--source pixabay` |
+| | `--pixabay-key` | Pixabay API key (required for Pixabay). | `--pixabay-key "your_api_key"` |
 | `-M` | `--keep` | Max downloaded images to keep in the wallpaper folder. Default: 1. | `-M 5` |
 | | `--save-dir` | Folder for downloaded wallpapers (defaults to `~/Pictures/Wallhaven`). | `--save-dir "~/Pictures/My Wallpapers"` |
 | `-L` | `--max-log-size`| Maximum log file size limit before rotation. | `-L "5MB"` |

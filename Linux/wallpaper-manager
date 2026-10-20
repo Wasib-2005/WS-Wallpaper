@@ -15,7 +15,7 @@ from collections import deque
 from tkinter import filedialog, messagebox, ttk
 
 
-APP_VERSION = "1.0.0.1"
+APP_VERSION = "1.0.0.2"
 RELEASE_API_URL = (
     "https://api.github.com/repos/Wasib-2005/WS-Wallpaper/releases/latest"
 )
@@ -239,9 +239,11 @@ class WallpaperManager:
             self.ratio_var.get(),
             self.sort_var.get(),
             self.top_range_var.get(),
+            self.source_var.get(),
             tuple(self.purity_vars[name].get() for name in ("SFW", "Sketchy", "NSFW")),
             tuple(self.category_vars[name].get() for name in ("General", "Anime", "People")),
             self.key_var.get(),
+            self.pixabay_key_var.get(),
             tuple(variable.get() for variable in self.timer_vars),
             self.keep_var.get(),
             self.save_dir_var.get(),
@@ -707,7 +709,7 @@ class WallpaperManager:
                  font=("TkDefaultFont", 10)).pack(anchor="w", pady=(0, 15))
         search = self.card(form)
         search.pack(fill="x", pady=(0, 12))
-        self.section_heading(search, "DISCOVERY", "Search Wallhaven and choose your preferred image quality.")
+        self.section_heading(search, "DISCOVERY", "Choose a wallpaper source and search preferences.")
         grid = tk.Frame(search, bg=CARD)
         grid.pack(fill="x", padx=20, pady=(0, 18))
         self.query_var = tk.StringVar(value=self.config.get("query", ""))
@@ -715,6 +717,7 @@ class WallpaperManager:
         self.ratio_var = tk.StringVar(value=self.config.get("ratio", "16x9,16x10,21x9"))
         self.sort_var = tk.StringVar(value=self.config.get("sort", "random"))
         self.top_range_var = tk.StringVar(value=self.config.get("top_range", "1M"))
+        self.source_var = tk.StringVar(value=self.config.get("source", "wallhaven"))
         self.add_entry(grid, "Search terms", self.query_var, 0, 0, 2)
         self.add_entry(grid, "Minimum resolution", self.resolution_var, 0, 2)
         self.add_entry(grid, "Aspect ratios", self.ratio_var, 1, 0, 2)
@@ -722,6 +725,8 @@ class WallpaperManager:
                        ("random", "date_added", "relevance", "views", "favorites", "toplist", "hot"), 1, 2)
         self.add_combo(grid, "Toplist range", self.top_range_var,
                        ("1d", "3d", "1w", "1M", "3M", "6M", "1y"), 2, 0)
+        self.add_combo(grid, "Wallpaper source", self.source_var,
+                       ("wallhaven", "pixabay"), 2, 2)
 
         safe = self.card(form)
         safe.pack(fill="x", pady=(0, 12))
@@ -736,6 +741,16 @@ class WallpaperManager:
         key_frame = tk.Frame(safe, bg=CARD)
         key_frame.pack(fill="x", padx=20, pady=(0, 18))
         self.add_entry(key_frame, "Wallhaven API key (needed for NSFW)", self.key_var, 0, 0, 1, secret=True)
+        self.pixabay_key_var = tk.StringVar(value=self.config.get("pixabay_key", ""))
+        self.add_entry(
+            key_frame, "Pixabay API key (required for Pixabay source)",
+            self.pixabay_key_var, 1, 0, 1, secret=True,
+        )
+        self.label(
+            key_frame,
+            "Get a key from pixabay.com/api/docs. Pixabay uses safe-search for landscape photos, caches searches for 24 hours, and records photo credits in Activity.",
+            color=MUTED, size=9, wraplength=700, justify="left",
+        ).grid(row=2, column=0, sticky="w", padx=5, pady=(3, 0))
 
         rotation = self.card(form)
         rotation.pack(fill="x", pady=(0, 12))
@@ -1024,6 +1039,10 @@ class WallpaperManager:
                              for name in ("General", "Anime", "People"))
         if "1" not in purity or "1" not in categories:
             raise ValueError("Select at least one content filter and one category.")
+        if self.source_var.get() == "pixabay" and not self.pixabay_key_var.get().strip():
+            raise ValueError("Enter a Pixabay API key to use the Pixabay source.")
+        if self.source_var.get() == "pixabay" and len(self.query_var.get().strip()) > 100:
+            raise ValueError("Pixabay search terms cannot exceed 100 characters.")
         save_dir = os.path.abspath(os.path.expanduser(self.save_dir_var.get().strip()))
         if not self.save_dir_var.get().strip():
             raise ValueError("Choose a folder for downloaded wallpapers.")
@@ -1033,9 +1052,11 @@ class WallpaperManager:
             ("--ratio", self.ratio_var.get().strip()),
             ("--sort", self.sort_var.get()),
             ("--top-range", self.top_range_var.get()),
+            ("--source", self.source_var.get()),
             ("--purity", purity),
             ("--categories", categories),
             ("--key", self.key_var.get().strip()),
+            ("--pixabay-key", self.pixabay_key_var.get().strip()),
             ("--timer", str(timer)),
             ("--keep", str(keep)),
             ("--save-dir", save_dir),

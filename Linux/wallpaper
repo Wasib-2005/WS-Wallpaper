@@ -2,6 +2,7 @@
 
 import argparse
 import csv
+import hashlib
 import json
 import os
 import platform
@@ -30,7 +31,10 @@ SAVE_DIR = os.path.expanduser("~/Pictures/Wallhaven")
 
 IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp")
 CONFIG_ARG_NAMES = ("key", "query", "resolution", "ratio", "purity", "sort",
-                    "categories", "top_range", "keep", "save_dir")
+                    "categories", "top_range", "keep", "save_dir", "source",
+                    "pixabay_key")
+PIXABAY_CACHE_FILE = os.path.join(CONFIG_DIR, "pixabay-cache.json")
+PIXABAY_CACHE_SECONDS = 24 * 60 * 60
 
 
 def parse_size_to_bytes(size_str):
@@ -293,6 +297,13 @@ def start_daemon():
 
 def fetch_wallpaper_url(args, config):
     """Fetches wallpaper URL using active config and CLI args."""
+    source = args.source if args.source is not None else config.get("source", "wallhaven")
+    if source == "pixabay":
+        return fetch_pixabay_url(args, config)
+    if source != "wallhaven":
+        log(f"❌ Unsupported wallpaper source: {source}")
+        return None, None
+
     raw_key = args.key if args.key is not None else config.get("api_key", "")
     api_key = str(raw_key).strip()
 
@@ -359,6 +370,128 @@ def fetch_wallpaper_url(args, config):
         return None, None
 
 
+def fetch_pixabay_url(args, config):
+    """Fetches a safe, landscape Pixabay photo while respecting the API cache window."""
+    raw_key = args.pixabay_key if args.pixabay_key is not None else config.get("pixabay_key", "")
+    api_key = str(raw_key).strip()
+    if not api_key or api_key.lower() == "none":
+        log("❌ Pixabay is selected, but no Pixabay API key is configured.")
+        return None, None
+
+    raw_query = args.query if args.query is not None else config.get("query", "")
+    query = str(raw_query).strip()
+    if len(query) > 100:
+        log("❌ Pixabay search terms cannot exceed 100 characters.")
+        return None, None
+
+    params = {
+        "q": query,
+        "image_type": "photo",
+        "orientation": "horizontal",
+        "safesearch": "true",
+        "per_page": "200",
+        "order": "popular",
+    }
+    cache_key = hashlib.sha256(
+        json.dumps(params, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    now = time.time()
+    try:
+        with open(PIXABAY_CACHE_FILE, "r", encoding="utf-8") as cache_file:
+            cache = json.load(cache_file)
+        cached = cache.get(cache_key) if isinstance(cache, dict) else None
+        if isinstance(cached, dict) and isinstance(cached.get("timestamp"), (int, float)):
+            hits = cached.get("hits")
+            age = now - cached["timestamp"]
+            if 0 <= age < PIXABAY_CACHE_SECONDS and isinstance(hits, list):
+                log("📦 Using the cached Pixabay search results.")
+                return select_pixabay_image(hits)
+    except FileNotFoundError:
+        pass
+    except (OSError, json.JSONDecodeError) as error:
+        log(f"⚠️ Could not read Pixabay search cache: {error}")
+
+    request_params = {"key": api_key, **params}
+    url = f"https://pixabay.com/api/?{urllib.parse.urlencode(request_params)}"
+    req = urllib.request.Request(url, headers={"User-Agent": "WS-Wallpaper"})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as response:
+            data = json.loads(response.read().decode("utf-8"))
+        hits = data.get("hits") if isinstance(data, dict) else None
+        if not isinstance(hits, list):
+            raise ValueError("Pixabay returned an invalid search response.")
+        try:
+            os.makedirs(CONFIG_DIR, exist_ok=True)
+            with open(PIXABAY_CACHE_FILE, "r", encoding="utf-8") as cache_file:
+                cache = json.load(cache_file)
+            if not isinstance(cache, dict):
+                cache = {}
+        except FileNotFoundError:
+            cache = {}
+        except (OSError, json.JSONDecodeError) as error:
+            log(f"⚠️ Could not update Pixabay search cache: {error}")
+            cache = {}
+        cache = {
+            key: entry for key, entry in cache.items()
+            if isinstance(entry, dict)
+            and isinstance(entry.get("timestamp"), (int, float))
+            and 0 <= now - entry["timestamp"] < PIXABAY_CACHE_SECONDS
+        }
+        cache[cache_key] = {"timestamp": now, "hits": hits}
+        tmp_path = PIXABAY_CACHE_FILE + ".tmp"
+        try:
+            with open(tmp_path, "w", encoding="utf-8") as cache_file:
+                json.dump(cache, cache_file)
+            os.replace(tmp_path, PIXABAY_CACHE_FILE)
+        except OSError as error:
+            log(f"⚠️ Could not save Pixabay search cache: {error}")
+        return select_pixabay_image(hits)
+    except urllib.error.HTTPError as error:
+        if error.code == 429:
+            log("❌ Pixabay API rate limit reached. Try again later.")
+        else:
+            log(f"❌ Pixabay API error: HTTP {error.code}. Check the Pixabay API key and settings.")
+        return None, None
+    except (OSError, urllib.error.URLError, TimeoutError,
+            UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
+        log(f"🌐 Could not search Pixabay: {error}")
+        return None, None
+
+
+def select_pixabay_image(hits):
+    if not hits:
+        log("❌ Pixabay found no photos matching the search terms.")
+        return None, None
+    selected = random.choice(hits)
+    if not isinstance(selected, dict):
+        log("❌ Pixabay returned an invalid photo result.")
+        return None, None
+    image_url = next(
+        (selected.get(name) for name in
+         ("fullHDURL", "largeImageURL", "imageURL", "webformatURL")
+         if isinstance(selected.get(name), str)),
+        None,
+    )
+    image_id = selected.get("id")
+    if not image_url or not str(image_id).isdigit():
+        log("❌ Pixabay returned a photo without a valid image URL or ID.")
+        return None, None
+    parsed_url = urllib.parse.urlparse(image_url)
+    if parsed_url.scheme != "https" or parsed_url.hostname not in (
+        "pixabay.com", "cdn.pixabay.com",
+    ):
+        log("❌ Pixabay returned an unexpected image URL.")
+        return None, None
+    extension = os.path.splitext(parsed_url.path)[1].lower()
+    if extension not in IMAGE_EXTS:
+        extension = ".jpg"
+    user = selected.get("user")
+    page_url = selected.get("pageURL")
+    if isinstance(user, str) and isinstance(page_url, str):
+        log(f"🖼️ Pixabay photo by {user}: {page_url}")
+    return image_url, f"pixabay-{image_id}{extension}"
+
+
 def download_image(url, save_path):
     """Downloads to a temp file first so a failed download never leaves a corrupt wallpaper."""
     log(f"📥 Downloading: {url}")
@@ -388,7 +521,7 @@ def cleanup_old_wallpapers(max_keep):
     try:
         files = [
             os.path.join(SAVE_DIR, f) for f in os.listdir(SAVE_DIR)
-            if f.startswith("wallhaven-")
+            if f.startswith(("wallhaven-", "pixabay-"))
             and f.lower().endswith(IMAGE_EXTS)
             and os.path.isfile(os.path.join(SAVE_DIR, f))
         ]
@@ -555,6 +688,10 @@ Examples: '16x9', '21x9', '16x9,21x9,16x10'""")
 
     parser.add_argument("-K", "--key", type=str, default=None, help="""Your Wallhaven API Key.
 Pass "" or "none" to remove key.""")
+    parser.add_argument("--source", choices=("wallhaven", "pixabay"), default=None,
+                        help="Wallpaper source (default: wallhaven).")
+    parser.add_argument("--pixabay-key", type=str, default=None,
+                        help="Your Pixabay API key. Pass empty or 'none' to remove it.")
 
     parser.add_argument("-P", "--purity", type=str, default=None, help="""Purity bitmask (SFW / Sketchy / NSFW).
   100 = SFW only (Default)
@@ -633,6 +770,8 @@ Examples: '500KB', '1MB', '5MB' (Default), '1GB', 'none'""")
     # Save to config if explicit CLI flags were passed
     new_cfg = {}
     if args.key is not None: new_cfg["api_key"] = args.key
+    if args.source is not None: new_cfg["source"] = args.source
+    if args.pixabay_key is not None: new_cfg["pixabay_key"] = args.pixabay_key
     if args.query is not None: new_cfg["query"] = args.query
     if args.timer is not None: new_cfg["timer"] = args.timer
     if args.resolution is not None: new_cfg["resolution"] = args.resolution
