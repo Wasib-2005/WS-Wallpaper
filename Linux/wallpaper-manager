@@ -2,14 +2,28 @@
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import threading
 import tkinter as tk
+import urllib.error
+import urllib.request
+import webbrowser
 from collections import deque
 from tkinter import filedialog, messagebox, ttk
 
+
+APP_VERSION = "1.0.0.0"
+RELEASE_API_URL = (
+    "https://api.github.com/repos/Wasib-2005/"
+    "Wallpaper-Manager---For-Wallhaven/releases/latest"
+)
+RELEASES_URL = (
+    "https://github.com/Wasib-2005/"
+    "Wallpaper-Manager---For-Wallhaven/releases"
+)
 
 if os.name == "nt":
     CONFIG_DIR = os.path.join(
@@ -60,15 +74,19 @@ class WallpaperManager:
         self.page = "Overview"
         self.scroll_canvas = None
         self.service_check_running = False
+        self.update_check_running = False
         self.status_text = tk.StringVar(value="Ready")
         self.service_text = tk.StringVar(value="Checking service…")
+        self.update_status = tk.StringVar(value=f"Version {APP_VERSION}")
         self.purity_vars = {}
         self.category_vars = {}
+        self.saved_preference_snapshot = None
 
         root.title("WS Wallpaper")
         root.geometry("1120x760")
         root.minsize(900, 640)
         root.configure(bg=BG)
+        root.protocol("WM_DELETE_WINDOW", self.close_window)
         self.configure_styles()
         self.set_window_icon()
         self.build_shell()
@@ -76,6 +94,7 @@ class WallpaperManager:
             self.root.bind_all(sequence, self.on_mousewheel, add="+")
         self.show_page("Overview")
         self.root.after(5000, self.poll_service)
+        self.root.after(1000, lambda: self.check_for_updates(manual=False))
 
     def configure_styles(self):
         style = ttk.Style()
@@ -166,6 +185,13 @@ class WallpaperManager:
                  font=("TkDefaultFont", 9, "bold")).pack(anchor="w", padx=25, pady=(0, 4))
         tk.Label(sidebar, text="A little more you.", bg=SIDEBAR, fg=MUTED,
                  font=("TkDefaultFont", 9)).pack(anchor="w", padx=25, pady=(0, 24))
+        tk.Label(sidebar, textvariable=self.update_status, bg=SIDEBAR, fg=MUTED,
+                 justify="left", wraplength=180,
+                 font=("TkDefaultFont", 9)).pack(anchor="w", padx=25, pady=(0, 5))
+        self.button(
+            sidebar, "Check for updates", lambda: self.check_for_updates(manual=True),
+            compact=True,
+        ).pack(anchor="w", padx=25, pady=(0, 18))
 
         content = tk.Frame(shell, bg=BG)
         content.pack(side="left", fill="both", expand=True)
@@ -182,6 +208,11 @@ class WallpaperManager:
         self.body.pack(fill="both", expand=True, padx=34, pady=(0, 24))
 
     def show_page(self, name):
+        if name != self.page and self.has_unsaved_preferences():
+            self.prompt_unsaved_preferences(lambda should_leave: (
+                self.show_page(name) if should_leave else None
+            ))
+            return
         self.disable_mousewheel_scroll()
         self.page = name
         for child in self.body.winfo_children():
@@ -202,6 +233,175 @@ class WallpaperManager:
             self.build_activity()
         if name == "Overview":
             self.refresh_overview()
+
+    def preference_snapshot(self):
+        return (
+            self.query_var.get(),
+            self.resolution_var.get(),
+            self.ratio_var.get(),
+            self.sort_var.get(),
+            self.top_range_var.get(),
+            tuple(self.purity_vars[name].get() for name in ("SFW", "Sketchy", "NSFW")),
+            tuple(self.category_vars[name].get() for name in ("General", "Anime", "People")),
+            self.key_var.get(),
+            tuple(variable.get() for variable in self.timer_vars),
+            self.keep_var.get(),
+            self.save_dir_var.get(),
+        )
+
+    def has_unsaved_preferences(self):
+        return (
+            self.page == "Preferences"
+            and self.saved_preference_snapshot is not None
+            and self.preference_snapshot() != self.saved_preference_snapshot
+        )
+
+    def prompt_unsaved_preferences(self, on_decision):
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Unsaved preferences")
+        dialog.transient(self.root)
+        dialog.resizable(False, False)
+        dialog.configure(bg=BG)
+
+        tk.Label(
+            dialog,
+            text="You have unsaved preference changes.",
+            bg=BG,
+            fg=TEXT,
+            font=("TkDefaultFont", 11, "bold"),
+        ).pack(anchor="w", padx=22, pady=(20, 6))
+        tk.Label(
+            dialog,
+            text="Save them before leaving?",
+            bg=BG,
+            fg=MUTED,
+            font=("TkDefaultFont", 10),
+        ).pack(anchor="w", padx=22, pady=(0, 18))
+
+        actions = tk.Frame(dialog, bg=BG)
+        actions.pack(fill="x", padx=16, pady=(0, 16))
+
+        def finish(should_leave):
+            if not dialog.winfo_exists():
+                return
+            dialog.grab_release()
+            dialog.destroy()
+            if should_leave is not None:
+                on_decision(should_leave)
+
+        def save_and_leave():
+            self.save_preferences(on_saved=lambda: finish(True))
+
+        def discard_and_leave():
+            self.saved_preference_snapshot = self.preference_snapshot()
+            finish(True)
+
+        self.button(actions, "Save", save_and_leave, primary=True).pack(side="left")
+        self.button(actions, "Don't Save", discard_and_leave).pack(side="left", padx=(8, 0))
+        self.button(actions, "Cancel", lambda: finish(None)).pack(side="right")
+        dialog.protocol("WM_DELETE_WINDOW", lambda: finish(None))
+        dialog.bind("<Escape>", lambda _event: finish(None))
+        dialog.grab_set()
+        dialog.update_idletasks()
+        x = self.root.winfo_rootx() + (self.root.winfo_width() - dialog.winfo_width()) // 2
+        y = self.root.winfo_rooty() + (self.root.winfo_height() - dialog.winfo_height()) // 2
+        dialog.geometry(f"+{x}+{y}")
+        dialog.focus_set()
+
+    def close_window(self):
+        if self.has_unsaved_preferences():
+            self.prompt_unsaved_preferences(
+                lambda should_close: self.root.destroy() if should_close else None
+            )
+            return
+        self.root.destroy()
+
+    @staticmethod
+    def version_tuple(version):
+        match = re.fullmatch(r"v?(\d+(?:\.\d+)*)", version, flags=re.IGNORECASE)
+        if not match:
+            raise ValueError(f"Unsupported release version: {version}")
+        return tuple(int(part) for part in match.group(1).split("."))
+
+    @classmethod
+    def is_newer_version(cls, candidate, current):
+        candidate_parts = cls.version_tuple(candidate)
+        current_parts = cls.version_tuple(current)
+        width = max(len(candidate_parts), len(current_parts))
+        candidate_parts += (0,) * (width - len(candidate_parts))
+        current_parts += (0,) * (width - len(current_parts))
+        return candidate_parts > current_parts
+
+    def check_for_updates(self, manual=True):
+        if self.update_check_running:
+            return
+        self.update_check_running = True
+        self.update_status.set("Checking for updates…")
+
+        def work():
+            try:
+                request = urllib.request.Request(
+                    RELEASE_API_URL,
+                    headers={
+                        "Accept": "application/vnd.github+json",
+                        "User-Agent": f"WS-Wallpaper/{APP_VERSION}",
+                    },
+                )
+                with urllib.request.urlopen(request, timeout=10) as response:
+                    release = json.loads(response.read().decode("utf-8"))
+                if not isinstance(release, dict):
+                    raise ValueError("GitHub returned an invalid release response.")
+                version = release.get("tag_name")
+                url = release.get("html_url")
+                if not isinstance(version, str) or not isinstance(url, str):
+                    raise ValueError("GitHub's latest release is missing its version or URL.")
+                if not url.startswith(RELEASES_URL + "/"):
+                    raise ValueError("GitHub returned an unexpected release URL.")
+                has_update = self.is_newer_version(version, APP_VERSION)
+                self.root.after(
+                    0, lambda: self.finish_update_check(
+                        version, url, has_update, manual=manual
+                    )
+                )
+            except (OSError, urllib.error.URLError, TimeoutError, UnicodeDecodeError,
+                    json.JSONDecodeError, ValueError) as error:
+                self.root.after(
+                    0, lambda error=error: self.finish_update_check(
+                        error=error, manual=manual
+                    )
+                )
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def finish_update_check(self, version=None, url=None, has_update=False,
+                            error=None, manual=True):
+        self.update_check_running = False
+        if error:
+            self.update_status.set("Update check failed — click to retry")
+            if manual:
+                messagebox.showerror("Could not check for updates", str(error), parent=self.root)
+            return
+        if has_update:
+            self.update_status.set(f"Update available: {version}")
+            if messagebox.askyesno(
+                "Update available",
+                f"WS Wallpaper {version} is available. Open the release page?",
+                parent=self.root,
+            ):
+                if not webbrowser.open(url):
+                    messagebox.showerror(
+                        "Could not open release page",
+                        f"Open this URL in your browser:\n{url}",
+                        parent=self.root,
+                    )
+            return
+        self.update_status.set(f"Version {APP_VERSION} is up to date")
+        if manual:
+            messagebox.showinfo(
+                "No updates available",
+                f"You're using the latest release ({APP_VERSION}).",
+                parent=self.root,
+            )
 
     def card(self, parent, **kwargs):
         return tk.Frame(parent, bg=CARD, highlightthickness=1,
@@ -576,6 +776,7 @@ class WallpaperManager:
         self.button(actions, "Save preferences", self.save_preferences, primary=True).pack(side="left")
         self.button(actions, "Start rotation", self.start_service).pack(side="left", padx=(9, 0))
         self.button(actions, "Stop rotation", self.stop_service).pack(side="left", padx=(9, 0))
+        self.saved_preference_snapshot = self.preference_snapshot()
 
     def section_heading(self, parent, title, subtitle):
         self.label(parent, title, color=ACCENT, size=9, bold=True).pack(anchor="w", padx=20, pady=(16, 4))
@@ -867,7 +1068,7 @@ class WallpaperManager:
         minutes, seconds = divmod(remainder, 60)
         return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
-    def save_preferences(self):
+    def save_preferences(self, on_saved=None):
         try:
             options = self.get_preferences()
         except ValueError as error:
@@ -882,7 +1083,10 @@ class WallpaperManager:
             self.status_text.set("Preferences saved")
             self.show_page("Preferences")
             self.refresh_overview()
-            messagebox.showinfo("Saved", "Your preferences have been saved.", parent=self.root)
+            if on_saved:
+                on_saved()
+            else:
+                messagebox.showinfo("Saved", "Your preferences have been saved.", parent=self.root)
         self.run_cli(args, "Saving preferences…", done)
 
     def change_now(self):
@@ -965,6 +1169,7 @@ class WallpaperManager:
         self.save_dir = os.path.abspath(os.path.expanduser(
             str(self.config.get("save_dir", SAVE_DIR))
         ))
+        self.saved_preference_snapshot = self.preference_snapshot()
         self.set_service_state(True)
 
     def refresh_service(self):
