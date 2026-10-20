@@ -4,6 +4,7 @@ import argparse
 import csv
 import hashlib
 import json
+import math
 import os
 import platform
 import random
@@ -16,13 +17,29 @@ import urllib.parse
 import urllib.request
 from collections import deque
 
-if os.name == "nt":
-    CONFIG_DIR = os.path.join(
-        os.environ.get("APPDATA", os.path.expanduser("~/AppData/Roaming")),
-        "Wallhaven",
-    )
-else:
-    CONFIG_DIR = os.path.expanduser("~/.config/wallhaven")
+def prepare_config_dir():
+    if os.name == "nt":
+        return os.path.join(
+            os.environ.get("APPDATA", os.path.expanduser("~/AppData/Roaming")),
+            "Wallhaven",
+        )
+    config_dir = os.path.expanduser("~/.config/ws-wallpaper")
+    legacy_dir = os.path.expanduser("~/.config/wallhaven")
+    if os.path.isdir(legacy_dir) and not os.path.exists(config_dir):
+        try:
+            os.makedirs(os.path.dirname(config_dir), exist_ok=True)
+            os.replace(legacy_dir, config_dir)
+        except FileNotFoundError:
+            if not os.path.exists(config_dir):
+                raise
+        except OSError as error:
+            raise RuntimeError(
+                f"Could not move existing settings from {legacy_dir} to {config_dir}: {error}"
+            ) from error
+    return config_dir
+
+
+CONFIG_DIR = prepare_config_dir()
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 LOG_FILE = os.path.join(CONFIG_DIR, "wallpaper.log")
 PID_FILE = os.path.join(CONFIG_DIR, "wallpaper.pid")
@@ -35,6 +52,31 @@ CONFIG_ARG_NAMES = ("key", "query", "resolution", "ratio", "purity", "sort",
                     "pixabay_key")
 PIXABAY_CACHE_FILE = os.path.join(CONFIG_DIR, "pixabay-cache.json")
 PIXABAY_CACHE_SECONDS = 24 * 60 * 60
+MIN_TIMER_MINUTES = 1 / 60
+
+
+def parse_timer_minutes(value):
+    try:
+        minutes = float(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("Timer must be a number of minutes.") from error
+    if not math.isfinite(minutes) or minutes < 0:
+        raise argparse.ArgumentTypeError("Timer must be a finite, non-negative number.")
+    if 0 < minutes < MIN_TIMER_MINUTES:
+        raise argparse.ArgumentTypeError("Timer must be 0 or at least 1 second (1/60 minute).")
+    return minutes
+
+
+def configured_timer_minutes(value):
+    try:
+        minutes = float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(minutes) or minutes < 0:
+        return 0.0
+    if 0 < minutes < MIN_TIMER_MINUTES:
+        return MIN_TIMER_MINUTES
+    return minutes
 
 
 def parse_size_to_bytes(size_str):
@@ -298,6 +340,9 @@ def start_daemon():
 def fetch_wallpaper_url(args, config):
     """Fetches wallpaper URL using active config and CLI args."""
     source = args.source if args.source is not None else config.get("source", "wallhaven")
+    if source in ("both", "random"):
+        source = random.choice(("wallhaven", "pixabay"))
+        log(f"🎲 Randomly selected {source.title()} for this wallpaper.")
     if source == "pixabay":
         return fetch_pixabay_url(args, config)
     if source != "wallhaven":
@@ -677,8 +722,8 @@ def main():
     parser.add_argument("-Q", "--query", type=str, default=None, help="""Search term(s) for wallpapers.
 Examples: 'nature', 'cyberpunk', '-anime' (exclude anime)""")
 
-    parser.add_argument("-T", "--timer", type=float, default=None, help="""Refresh timer in minutes.
-Examples: '30' (30 mins), '0.5' (30 seconds)""")
+    parser.add_argument("-T", "--timer", type=parse_timer_minutes, default=None, help="""Refresh timer in minutes (minimum 1 second).
+Examples: '30' (30 mins), '0.5' (30 seconds), '0.0166667' (1 second)""")
 
     parser.add_argument("-R", "--resolution", type=str, default=None, help="""Minimum resolution.
 Examples: '1920x1080', '2560x1440', '3840x2160'""")
@@ -688,8 +733,9 @@ Examples: '16x9', '21x9', '16x9,21x9,16x10'""")
 
     parser.add_argument("-K", "--key", type=str, default=None, help="""Your Wallhaven API Key.
 Pass "" or "none" to remove key.""")
-    parser.add_argument("--source", choices=("wallhaven", "pixabay"), default=None,
-                        help="Wallpaper source (default: wallhaven).")
+    parser.add_argument("--source", choices=("wallhaven", "pixabay", "both", "random"),
+                        default=None,
+                        help="Wallpaper source: wallhaven, pixabay, or both/random (randomly choose for each wallpaper).")
     parser.add_argument("--pixabay-key", type=str, default=None,
                         help="Your Pixabay API key. Pass empty or 'none' to remove it.")
 
@@ -814,10 +860,7 @@ Examples: '500KB', '1MB', '5MB' (Default), '1GB', 'none'""")
         sys.exit(0)
 
     def current_timer(cfg):
-        try:
-            t = float(cfg.get("timer", 0) or 0)
-        except (TypeError, ValueError):
-            t = 0.0
+        t = configured_timer_minutes(cfg.get("timer", 0))
         if t <= 0 and cli_timer is not None and cli_timer > 0:
             t = cli_timer
         return t

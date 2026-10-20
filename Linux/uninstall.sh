@@ -9,7 +9,7 @@ APP_ENTRY="$HOME/.local/share/applications/ws-wallpaper.desktop"
 ICON_FILE="$HOME/.local/share/icons/hicolor/512x512/apps/ws-wallpaper.png"
 LEGACY_APP_ENTRY="$HOME/.local/share/applications/wallhaven-wallpaper-manager.desktop"
 DESKTOP_ENTRY="$HOME/.config/autostart/wallhaven-daemon.desktop"
-CONFIG_DIR="$HOME/.config/wallhaven"
+CONFIG_DIR="$HOME/.config/ws-wallpaper"
 PID_FILE="$CONFIG_DIR/wallpaper.pid"
 
 echo "Removing WS Wallpaper..."

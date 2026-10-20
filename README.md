@@ -1,251 +1,323 @@
-# WS Wallpaper: Wallhaven Wallpaper Downloader and Manager
+# WS Wallpaper
 
-<p align="center">
-  <img src="Linux/ws-wallpaper.png" alt="WS Wallpaper app icon" width="160">
-</p>
+WS Wallpaper helps you find, download, organize, and apply desktop wallpapers.
+The desktop app runs on Linux and Windows. A separate Android app is available
+for phones and tablets. The desktop command-line tool also supports macOS.
 
-WS Wallpaper is a free, open-source wallpaper manager for Linux, Windows, and Android. Search Wallhaven or Pixabay, download and organize wallpapers, apply them to your desktop or phone, and automate wallpaper changes with built-in rotation controls.
+Choose wallpapers from **Wallhaven**, **Pixabay**, or **Both (random)**. In
+random mode, the app chooses a provider for each wallpaper change. You can
+change one wallpaper on demand or set up automatic rotation.
 
-The project includes a desktop GUI and command-line wallpaper tool for Linux and Windows, plus a native Android app. The CLI also supports macOS. Build installers and apps from source; prebuilt APK, EXE, `.deb`, and `.rpm` packages are not included in this repository.
+> **Quick start:** Install the app for your platform, open **Preferences**,
+> choose a source, add its API key if needed, set your search and timer, and
+> choose **Save preferences**. Use **Change wallpaper** for a one-time change,
+> or start rotation for automatic changes.
 
-The current desktop app version is **1.0.0.2**. The app checks GitHub for newer
-releases at startup and provides a manual **Check for updates** action. A new
-version opens its GitHub release page; updates are not installed automatically.
-Pushing a `v*` tag builds and publishes Windows installer and portable assets
-through GitHub Actions.
+## What it can do
 
-## ✨ Features
+- Search Wallhaven with resolution, aspect-ratio, category, content, and sort
+  filters.
+- Search Pixabay for safe, horizontal photos.
+- Use either provider or let **Both (random)** pick a provider on each refresh.
+- Download wallpapers to a folder you choose, browse the saved library, and
+  apply images to your desktop.
+- Set an automatic desktop rotation interval; refresh manually at any time.
+- Save activity logs and clean up older downloads.
+- Check for desktop-app updates from GitHub.
 
-- **Wallhaven Search and Filtering:** Search by keywords and filter by resolution, aspect ratio, purity (SFW/Sketchy/NSFW), and categories.
-- **Pixabay Source:** Optionally search safe, landscape photos with your Pixabay API key.
-- **Desktop GUI:** Browse your collection, tune search preferences, review activity, and control rotation on Linux and Windows.
-- **Wallpaper Library:** Preview thumbnails, open images in your desktop viewer, and delete saved wallpapers.
-- **Automatic Wallpaper Rotation:** Run the background service on a customizable timer, or use Android WorkManager to schedule wallpaper changes.
-- **Immediate Refresh:** Fetch and apply another wallpaper without waiting for the timer.
-- **Persistent Configuration:** Save search, filtering, storage, and rotation settings.
-- **Version Checks:** Check GitHub releases at startup or manually from the app.
-- **Automatic Cleanup:** Remove old downloads automatically to save disk space.
-- **Smart Logging:** Keep service logs with configurable log rotation.
-- **Command-Line Tool:** Download and apply Wallhaven or Pixabay wallpapers from Linux and Windows; the CLI also supports macOS.
+## Choose where to install
 
-## Project Structure
+| Platform | Start here |
+| --- | --- |
+| Linux | [Install on Linux](#linux-installation) |
+| Windows | [Install on Windows](#windows-installation) |
+| Android | [Install or build for Android](#android) |
+| macOS | Use the [command-line tool](#command-line-usage); there is no macOS GUI installer. |
 
-- `Linux/` contains the Linux installer, desktop GUI, wallpaper CLI, and app icon.
-- `Windows/` contains Windows build scripts, a startup helper, and installer packaging.
-- `Android/` contains the native Android app and WorkManager-based wallpaper rotation.
-- `install.sh` and `uninstall.sh` are the top-level Linux installation scripts.
+## Get an API key
 
----
+The API key belongs to the provider you select. You can start with Wallhaven's
+free search without a key for SFW content; add its key if you need NSFW results.
+Pixabay requires its own API key. **Do not share your keys or publish them in
+screenshots, source code, or public config files.**
 
-## 📁 Repository Layout
+### Wallhaven
 
-```text
-Wallpaper Manager/
-├── README.md
-├── install.sh
-├── uninstall.sh
-├── Linux/
-│   ├── setup.sh
-│   ├── wallpaper
-│   ├── wallpaper-manager
-│   └── ws-wallpaper.png
-├── Windows/
-│   ├── build.ps1
-│   ├── cli_entry.py
-│   ├── gui_entry.py
-│   ├── make_icon.py
-│   └── startup.py
-├── Android/
-│   ├── app/
-│   ├── build.gradle
-│   ├── gradlew
-│   └── settings.gradle
-└── .github/
-```
+1. Sign in to [Wallhaven](https://wallhaven.cc/).
+2. Open the [Wallhaven API help page](https://wallhaven.cc/help/api).
+3. Generate or copy your API key.
+4. In the desktop app, open **Preferences** and enter it in **Wallhaven API
+   key**. The key is required for NSFW results.
 
-> Generated build artifacts and local runtime files are intentionally excluded from Git via `.gitignore`.
+### Pixabay
 
-## 🚀 Installation (Linux)
+1. Create an account or sign in at [Pixabay](https://pixabay.com/).
+2. Follow the instructions on the [Pixabay API documentation page](https://pixabay.com/api/docs/)
+   to get an API key.
+3. In **Preferences**, enter it in **Pixabay API key**.
 
-This project does not ship prebuilt APK, EXE, or Linux `.deb`/`.rpm` packages. Build your own from source using the scripts in this repository.
+The Pixabay integration searches for safe, horizontal photos. Search responses
+are cached for 24 hours to follow Pixabay's API requirements; the app can still
+select a different photo from the cached results on each wallpaper refresh.
+Pixabay photo attribution is recorded in Activity.
 
-The installer adds **WS Wallpaper** (with its custom icon) to your applications menu and installs the CLI and background service for your user. Administrator authorization is only needed if it has to install missing system dependencies.
+## Linux installation
 
-1. Download or clone the repository and open a terminal in its folder:
+The Linux installer adds the app to your applications menu and installs the
+desktop app and `wallpaper` command for your user. It supports Debian/Ubuntu,
+Fedora/RHEL, Arch, and openSUSE. Python 3, Tkinter, and Pillow with Tk support
+are required; the installer checks for them and can ask for administrator
+authorization to install missing packages.
+
+1. Clone the repository and enter its directory:
+
    ```bash
-   git clone https://github.com/Wasib-2005/WS-Wallpaper
+   git clone https://github.com/Wasib-2005/WS-Wallpaper.git
    cd WS-Wallpaper
    ```
+
 2. Run the installer:
+
    ```bash
    chmod +x install.sh
    ./install.sh
    ```
 
-The installer detects Debian/Ubuntu, Fedora/RHEL, Arch, and openSUSE. If Python 3, Tkinter, or Pillow with Tk support is missing, it installs them using the system package manager and asks for administrator authorization (`sudo`) when required.
-
 3. Launch **WS Wallpaper** from your applications menu, or run:
+
    ```bash
    ~/.local/bin/ws-wallpaper
    ```
 
-The installer also provides a `wallpaper` command-line tool. In Preferences, choose a folder for downloaded wallpapers and set the rotation interval in `HH:MM:SS` format (for example, `00:30:00`). New downloads, the Library, cleanup, and offline fallback use the selected folder; existing images are not moved. Pillow provides the in-app wallpaper thumbnails and preview; the installer checks that this dependency is available after installation.
+### First-time Linux setup
 
-To uninstall:
-```bash
-./uninstall.sh
-```
+1. Open **Preferences**.
+2. Select **Wallhaven**, **Pixabay**, or **Both (random)**.
+3. Enter the API key for the selected provider. **Both (random)** requires a
+   Pixabay key; the Wallhaven key is optional for SFW searches.
+4. Enter search terms and adjust the filters that apply to your selected
+   provider.
+5. Choose a wallpaper folder and save your preferences.
+6. Choose **Change wallpaper** to fetch one now, or **Start rotation** to run
+   automatically.
 
-The CLI can also be used directly as described below.
+**Both (random)** selects one provider per refresh, not both providers for the
+same refresh. Wallhaven-specific resolution, aspect-ratio, category, purity,
+and sorting filters do not apply to Pixabay.
 
-## Windows
+### Linux files and config
 
-Use the Windows build script to generate a per-user installer or portable package.
-The resulting setup installs WS Wallpaper to the Start menu, can add a desktop
-shortcut, and can start wallpaper rotation when you sign in. No administrator
-access is required. The installer includes the GUI, CLI, and background startup
-helper; Python does not need to be installed on the target PC. Uninstall it from
-Windows Settings or Control Panel. Your settings, logs, and downloaded wallpapers
-are kept.
+- App: `~/.local/bin/ws-wallpaper`
+- CLI: `~/.local/bin/wallpaper`
+- Settings, API keys, cache, and logs: `~/.config/ws-wallpaper/`
+- Wallpapers: `~/Pictures/Wallhaven/` by default; the folder is configurable.
 
-To build the Windows installer yourself, use a Windows PC with Python 3 and
-Inno Setup 6 installed. From PowerShell at the repository root, run:
+If `~/.config/wallhaven/` exists and `~/.config/ws-wallpaper/` does not, the
+app moves the old directory on startup to retain settings and runtime files.
+
+To uninstall the app, run `./uninstall.sh` from the repository. The uninstaller
+asks whether to remove your settings and logs.
+
+## Windows installation
+
+The current desktop release is **1.0.0.3**. Download
+**WS-Wallpaper-Setup.exe** from
+[GitHub Releases](https://github.com/Wasib-2005/WS-Wallpaper/releases/latest)
+and run it. The per-user installer does not require administrator access.
+During setup, you can choose whether to create a desktop shortcut and whether
+to start rotation when you sign in. Uninstall it from Windows Settings or
+Control Panel.
+
+The release also includes a portable ZIP. Extract it and launch
+`ws-wallpaper.exe`.
+
+The desktop app checks for newer releases at startup and has a manual
+**Check for updates** action. If an update is available, it opens the release
+page; installation is not automatic.
+
+Windows user settings and logs are stored in `%APPDATA%\Wallhaven`; wallpapers
+are saved to `Pictures\Wallhaven` by default. Python does not need to be
+installed to use the released Windows packages.
+
+### Build Windows packages from source
+
+On a Windows PC, install Python 3. To build the installer, also install Inno
+Setup 6. From PowerShell at the repository root, run:
 
 ```powershell
 .\Windows\build.ps1
 ```
 
-This creates `dist\WS-Wallpaper-Setup.exe` and
-`dist\WS-Wallpaper-Windows-portable.zip`. To build just the portable package
-without Inno Setup, run `.\Windows\build.ps1 -PortableOnly`. Both packages
-contain standalone executables built from the same GUI and wallpaper CLI source
-used by Linux. Windows user data is stored in `%APPDATA%\Wallhaven`; wallpapers
-default to the user's `Pictures\Wallhaven` folder.
+The build creates `dist\WS-Wallpaper-Setup.exe` and
+`dist\WS-Wallpaper-Windows-portable.zip`. To build only the portable ZIP without
+Inno Setup, run:
 
-The Windows build workflow can also be run from the repository's GitHub Actions
-tab; it publishes the installer and portable ZIP as workflow artifacts.
+```powershell
+.\Windows\build.ps1 -PortableOnly
+```
 
 ## Android
 
-The native Android app is in `Android/`. It requires JDK 17 and Android SDK
-platform 36. To build a debug APK:
+The repository does not currently include a prebuilt APK. To build a debug APK
+yourself, install JDK 17 and Android SDK platform 36, then run:
 
 ```bash
 cd Android
 ./gradlew assembleDebug
 ```
 
-The APK is created at `Android/app/build/outputs/apk/debug/app-debug.apk`.
-Install it on a connected device with:
+The APK is written to
+`Android/app/build/outputs/apk/debug/app-debug.apk`. Install it on a connected
+device with Android Debug Bridge:
 
 ```bash
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-Android schedules automatic wallpaper rotation through WorkManager, so the
-system controls the exact execution time and the minimum interval is 15 minutes.
+The Android app currently searches Wallhaven; the desktop Pixabay source
+selector is not available on Android. Open **Preferences** to set the Wallhaven
+search and API key, then use **Change wallpaper now** or enable automatic
+rotation. Android uses WorkManager: the system controls exact execution times,
+and background rotation cannot run more frequently than every 15 minutes.
 
----
+## Use the desktop app
 
-## 📖 Usage
+The desktop GUI is the easiest way to get started:
 
-You can run the script manually, or set it up to run as a daemon.
+1. **Overview:** change the wallpaper now, check rotation status, or open the
+   library.
+2. **Preferences:** select a source, configure its API key and search options,
+   choose the download folder, and set the rotation interval.
+3. Select **Save preferences** to apply settings.
+4. Select **Start rotation** for automatic changes, or **Stop rotation** to
+   stop it.
+5. Visit **Library** to preview, open, or delete saved wallpapers; use
+   **Activity** to inspect recent actions and errors.
 
-### Basic Examples
+The desktop timer accepts values from **one second** (`00:00:01`) upwards.
+Very frequent Wallhaven requests can be limited by Wallhaven's API. The Pixabay
+24-hour cache limits how often search results are requested from Pixabay, not
+how often the app can choose and apply a cached photo.
 
-**Set a random nature wallpaper immediately:**
+## Command-line usage
+
+The `wallpaper` CLI is installed on Linux and included in the Windows packages.
+On Linux, use `wallpaper` if `~/.local/bin` is on your `PATH`; otherwise run
+`~/.local/bin/wallpaper`.
+
+### Examples
+
+Download and apply a random SFW Wallhaven wallpaper:
+
 ```bash
 wallpaper -Q "nature"
 ```
 
-**Start the background daemon, changing a Cyberpunk wallpaper every 30 minutes:**
-```bash
-wallpaper -Q "cyberpunk" -T 30 -d
-```
-
-**Exclude anime wallpapers, set resolution to 4K, and run in the background:**
-```bash
-wallpaper -Q "-anime" -R 3840x2160 -d
-```
-
-**Pull from the all-time top-rated wallpapers instead of random:**
-```bash
-wallpaper -S toplist --top-range 1y
-```
-
-**Save settings without running (updates your default config):**
-```bash
-wallpaper -Q "landscape" -R 2560x1440 --set
-```
-
----
-
-## ⚙️ Service & Management Commands
-
-Once the daemon is running in the background (`-d`), you can control it using these commands:
-
-| Command | Description |
-| :--- | :--- |
-| `wallpaper --now` | Instantly fetches and applies a new wallpaper. |
-| `wallpaper --status` | Checks if the background daemon is currently running. |
-| `wallpaper --stop` | Stops the running background daemon. |
-| `wallpaper --set` | Saves the passed flags to config without running or starting the daemon. |
-| `wallpaper -LOG` | Prints the last 50 lines of the daemon's log. |
-| `wallpaper -f` | Live streams the background service logs. |
-
----
-
-## 🛠️ Configuration Options
-
-In the desktop app's **Preferences**, select **Pixabay** as the wallpaper source
-and enter your Pixabay API key. Get a key from
-[Pixabay API documentation](https://pixabay.com/api/docs/). Pixabay search
-responses are cached for 24 hours, and photo attribution is recorded in
-Activity. Wallhaven remains the default source.
-
-| Flag | Name | Description | Example |
-| :--- | :--- | :--- | :--- |
-| `-Q` | `--query` | Search term(s). Use `-` to exclude (e.g., `-anime`). | `-Q "cars"` |
-| `-T` | `--timer` | Refresh timer in minutes. | `-T 15` (15 mins) |
-| `-R` | `--resolution`| Minimum resolution. | `-R "1920x1080"` |
-| `-A` | `--ratio` | Aspect ratio(s) separated by commas. | `-A "16x9,21x9"` |
-| `-P` | `--purity` | Purity bitmask (100=SFW, 010=Sketchy, 001=NSFW). | `-P "110"` |
-| `-C` | `--categories`| Category bitmask (100=General, 010=Anime, 001=People). | `-C "100"` |
-| `-S` | `--sort` | Sorting method (random, date_added, toplist, etc.). | `-S "random"` |
-| | `--top-range` | Timeframe when `--sort toplist` is used (1d, 3d, 1w, 1M, 3M, 6M, 1y). | `--top-range 1M` |
-| `-K` | `--key` | Wallhaven API Key (Required for NSFW / 001 content). | `-K "your_api_key"` |
-| | `--source` | Wallpaper source (`wallhaven` or `pixabay`). | `--source pixabay` |
-| | `--pixabay-key` | Pixabay API key (required for Pixabay). | `--pixabay-key "your_api_key"` |
-| `-M` | `--keep` | Max downloaded images to keep in the wallpaper folder. Default: 1. | `-M 5` |
-| | `--save-dir` | Folder for downloaded wallpapers (defaults to `~/Pictures/Wallhaven`). | `--save-dir "~/Pictures/My Wallpapers"` |
-| `-L` | `--max-log-size`| Maximum log file size limit before rotation. | `-L "5MB"` |
-
-> **Note on Clearing Configs:** If you want to reset a saved setting back to default, pass `none` or an empty string. Example: `wallpaper -K none` will remove your saved API key. This also applies to numeric flags like `-M`/`--keep`: passing `-M 0` with `--set` won't persist as "unlimited" — it clears the setting back to the default (`1`) instead. `-M 0` still works for a single one-off run without `--set`.
-
----
-
-## 📂 File Locations
-
-- **CLI:** `~/.local/bin/wallpaper`
-- **GUI:** `~/.local/bin/ws-wallpaper`
-- **Config & Logs:** `~/.config/wallhaven/`
-  - `config.json` (Saved settings)
-  - `wallpaper.log` (Service logs)
-- **Wallpapers:** `~/Pictures/Wallhaven/`
-- **Application menu:** `~/.local/share/applications/ws-wallpaper.desktop`
-- **Application icon:** `~/.local/share/icons/hicolor/512x512/apps/ws-wallpaper.png`
-- **Autostart Entry:** `~/.config/autostart/wallhaven-daemon.desktop`
-
-On Windows, the installer places the GUI, CLI, and startup helper under
-`%LOCALAPPDATA%\Programs\WS Wallpaper`, and user settings/logs under
-`%APPDATA%\Wallhaven`.
-
----
-
-## 🗑️ Uninstallation
-
-If you wish to remove the app, script, and autostart entry, run:
+Choose a source and save the choice and search term:
 
 ```bash
-./uninstall.sh
+wallpaper --source pixabay --pixabay-key "YOUR_PIXABAY_KEY" -Q "mountains" --set
 ```
+
+Choose randomly between providers on each wallpaper change:
+
+```bash
+wallpaper --source both --pixabay-key "YOUR_PIXABAY_KEY" -Q "nature" --set
+```
+
+Set a Wallhaven API key for NSFW searches:
+
+```bash
+wallpaper --key "YOUR_WALLHAVEN_KEY" --purity 001 --set
+```
+
+Start automatic rotation every 30 minutes:
+
+```bash
+wallpaper --timer 30 --daemon
+```
+
+The CLI timer is in minutes. The minimum is one second, or approximately
+`0.0166667` minutes:
+
+```bash
+wallpaper --timer 0.0166667 --set
+```
+
+`--set` saves the supplied settings without changing the wallpaper or starting
+rotation. Settings are read from the shared config file on the next run and by
+the running service. Avoid putting API keys directly in shell history; enter
+them in the app's masked Preferences fields when possible.
+
+### Service commands
+
+| Command | What it does |
+| --- | --- |
+| `wallpaper --now` | Ask a running service to change the wallpaper now. |
+| `wallpaper --status` | Show whether automatic rotation is running. |
+| `wallpaper --stop` | Stop the background service. |
+| `wallpaper --once` | Fetch and apply one wallpaper without starting a service. |
+| `wallpaper --config` | Print the active configuration. Treat the output as secret if it contains API keys. |
+| `wallpaper --log` | Print recent service logs. |
+| `wallpaper --log --follow` | Follow service logs as they are written. |
+
+### Common CLI options
+
+| Option | Purpose |
+| --- | --- |
+| `-Q`, `--query` | Search terms. |
+| `-T`, `--timer` | Rotation interval in minutes; minimum one second. |
+| `-R`, `--resolution` | Wallhaven minimum image resolution, for example `1920x1080`. |
+| `-A`, `--ratio` | Wallhaven aspect ratios, for example `16x9,21x9`. |
+| `-P`, `--purity` | Wallhaven content mask: `100` SFW, `010` Sketchy, `001` NSFW. |
+| `-C`, `--categories` | Wallhaven category mask: General, Anime, People. |
+| `-S`, `--sort` | Wallhaven sorting option, such as `random`, `relevance`, or `toplist`. |
+| `--top-range` | Wallhaven toplist period, for example `1M` or `1y`. |
+| `-K`, `--key` | Wallhaven API key. |
+| `--source` | `wallhaven`, `pixabay`, or `both` (`random` is an alias). |
+| `--pixabay-key` | Pixabay API key. |
+| `-M`, `--keep` | Maximum number of downloaded wallpapers to retain. |
+| `--save-dir` | Wallpaper download folder. |
+
+For the full option list, run `wallpaper --help`.
+
+## Troubleshooting
+
+- **No wallpapers found:** Check the spelling of your search terms and loosen
+  provider-specific filters. Wallhaven can return zero results for a
+  misspelled or overly restrictive search.
+- **Pixabay does not download:** Confirm Pixabay is selected and its API key is
+  entered. Pixabay search terms cannot exceed 100 characters.
+- **NSFW search fails:** Confirm the Wallhaven API key is set and NSFW is
+  enabled in the Wallhaven purity filters.
+- **Wallpaper downloads but does not appear:** Check your desktop environment
+  and the Activity log. Some Linux desktop environments need an image utility
+  such as `feh`; KDE and GNOME use their desktop-specific integration.
+- **Automatic rotation is delayed on Android:** Android WorkManager is
+  controlled by the operating system and battery settings; its minimum
+  interval is 15 minutes.
+- **Inspect Linux service logs:** run `wallpaper --log`.
+
+## Privacy and API use
+
+The app uses the provider API you choose to search for images. API keys are
+stored in your local app settings so the app can make those requests. Do not
+share the settings file or CLI configuration output publicly. Pixabay search
+responses are cached locally for 24 hours. Downloaded images are stored in the
+folder you configure.
+
+Review the providers' current terms and rate limits:
+[Wallhaven API help](https://wallhaven.cc/help/api) ·
+[Pixabay API documentation and terms](https://pixabay.com/api/docs/).
+
+## Project layout
+
+- `Linux/` — Linux GUI, wallpaper CLI, and installer.
+- `Windows/` — Windows build scripts and installer definition.
+- `Android/` — native Android app.
+- `install.sh` / `uninstall.sh` — Linux install and uninstall entry points.
+- `.github/workflows/` — automated Windows build and release workflow.
+
+## License
+
+See [LICENSE](LICENSE).
