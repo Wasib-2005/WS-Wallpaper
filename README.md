@@ -101,6 +101,19 @@ authorization to install missing packages.
 6. Choose **Change wallpaper** to fetch one now, or **Start rotation** to run
    automatically.
 
+**Preferences → Appearance** has two independent choices: a UI style/layout
+(Flat Design, Glassmorphism, Neomorphism, Bento Grid, Brutalism / Neo-Brutalism,
+Dark Mode Design, Skeuomorphism, or Retro-Futuristic / Cyberpunk) and a color
+palette (light, dark, cupcake, synthwave, retro, cyberpunk, valentine,
+halloween, forest, aqua, lofi, pastel, fantasy, wireframe, black, luxury,
+dracula, cmyk, autumn, business, acid, lemonade, night, coffee, or winter;
+plus Ocean, Sunset, and High contrast). Each selection
+previews immediately, including a miniature of the selected dashboard layout,
+and is saved with your preferences. Each UI style also uses a distinct overview
+composition. Native Tk does not provide blurred or translucent surfaces or
+true glowing effects, so Glassmorphism and Cyberpunk use layered outlines and
+palette accents instead.
+
 **Both (random)** selects one provider per refresh, not both providers for the
 same refresh. Wallhaven-specific resolution, aspect-ratio, category, purity,
 and sorting filters do not apply to Pixabay.
@@ -111,6 +124,32 @@ and sorting filters do not apply to Pixabay.
 - CLI: `~/.local/bin/wallpaper`
 - Settings, API keys, cache, and logs: `~/.config/ws-wallpaper/`
 - Wallpapers: `~/Pictures/Wallhaven/` by default; the folder is configurable.
+
+On first launch, the desktop app creates `~/.config/ws-wallpaper/config.json`
+with basic SFW Wallhaven defaults. The CLI uses the same defaults and writes
+the config file when you save settings. The initial values are:
+
+```json
+{
+  "query": "mountain",
+  "resolution": "1920x1080",
+  "ratio": "16x9",
+  "purity": "100",
+  "categories": "100",
+  "sort": "random",
+  "top_range": "3M",
+  "timer": 30.0,
+  "keep": 5,
+  "max_log_size": "1MB",
+  "source": "wallhaven",
+  "theme": "forest",
+  "ui_style": "Flat Design"
+}
+```
+
+API keys are not included. Change these settings in **Preferences** or with
+the `wallpaper` command. The log-size field accepts values such as `500KB`,
+`1MB`, or `2GB`.
 
 If `~/.config/wallhaven/` exists and `~/.config/ws-wallpaper/` does not, the
 app moves the old directory on startup to retain settings and runtime files.
@@ -155,6 +194,17 @@ Inno Setup, run:
 ```powershell
 .\Windows\build.ps1 -PortableOnly
 ```
+
+To build the portable app and launch the Windows GUI when the build finishes,
+run:
+
+```powershell
+.\Windows\build.ps1 -PortableOnly -Launch
+```
+
+In the app, choose **Change wallpaper** to download and apply a wallpaper.
+The portable build can also be started directly by opening
+`dist\WSWallpaper\ws-wallpaper.exe`.
 
 ## Android
 
@@ -312,11 +362,34 @@ Review the providers' current terms and rate limits:
 
 ## Project layout
 
-- `Linux/` — Linux GUI, wallpaper CLI, and installer.
-- `Windows/` — Windows build scripts and installer definition.
-- `Android/` — native Android app.
-- `install.sh` / `uninstall.sh` — Linux install and uninstall entry points.
-- `.github/workflows/` — automated Windows build and release workflow.
+```text
+.
+├── Android/
+│   ├── app/src/main/     Android app source, resources, and manifest
+│   ├── gradle/wrapper/   Gradle wrapper
+│   └── *.gradle          Android build configuration
+├── Linux/
+│   ├── wallpaper         Shared wallpaper CLI
+│   ├── wallpaper-manager Shared desktop GUI
+│   ├── setup.sh          Linux installer implementation
+│   ├── uninstall.sh      Linux uninstall implementation
+│   └── ws-wallpaper.png  App icon
+├── Windows/
+│   ├── gui_entry.py      Windows GUI launcher
+│   ├── cli_entry.py      Windows CLI launcher
+│   ├── startup.py        Sign-in rotation launcher
+│   ├── make_icon.py      Windows icon generation
+│   ├── installer.iss     Inno Setup installer definition
+│   └── build.ps1         Windows package build
+├── .github/workflows/    Automated Windows build workflow
+├── install.sh            Linux install entry point
+└── uninstall.sh         Linux uninstall entry point
+```
+
+Android Gradle caches and intermediate build files, Python bytecode caches,
+and packaged release files are generated outputs and are ignored by Git.
+Build the Android debug APK with `cd Android && ./gradlew assembleDebug`;
+the APK is written to `Android/app/build/outputs/apk/debug/`.
 
 ## License
 

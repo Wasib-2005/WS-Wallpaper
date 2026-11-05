@@ -45,6 +45,21 @@ LOG_FILE = os.path.join(CONFIG_DIR, "wallpaper.log")
 PID_FILE = os.path.join(CONFIG_DIR, "wallpaper.pid")
 TRIGGER_FILE = os.path.join(CONFIG_DIR, "reload.flag")
 SAVE_DIR = os.path.expanduser("~/Pictures/Wallhaven")
+DEFAULT_CONFIG = {
+    "query": "mountain",
+    "resolution": "1920x1080",
+    "ratio": "16x9",
+    "purity": "100",
+    "categories": "100",
+    "sort": "random",
+    "top_range": "3M",
+    "timer": 30.0,
+    "keep": 5,
+    "max_log_size": "1MB",
+    "source": "wallhaven",
+    "theme": "forest",
+    "ui_style": "Flat Design",
+}
 
 IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp")
 CONFIG_ARG_NAMES = ("key", "query", "resolution", "ratio", "purity", "sort",
@@ -106,7 +121,7 @@ def rotate_log_if_needed():
         return
 
     config = load_config()
-    raw_limit = config.get("max_log_size", "5MB")
+    raw_limit = config.get("max_log_size", "1MB")
     max_bytes = parse_size_to_bytes(raw_limit) or (5 * 1024 * 1024)
 
     try:
@@ -142,10 +157,11 @@ def load_config():
         try:
             with open(CONFIG_FILE, "r") as f:
                 data = json.load(f)
-                return data if isinstance(data, dict) else {}
+                if isinstance(data, dict):
+                    return {**DEFAULT_CONFIG, **data}
         except Exception:
-            return {}
-    return {}
+            pass
+    return dict(DEFAULT_CONFIG)
 
 
 def save_config(new_settings):
@@ -358,10 +374,10 @@ def fetch_wallpaper_url(args, config):
     res_arg = str(args.resolution if args.resolution is not None else config.get("resolution", "1920x1080")).strip()
     resolution = res_arg.replace("*", "x")
 
-    ratio = str(args.ratio if args.ratio is not None else config.get("ratio", "16x9,16x10,21x9")).strip()
+    ratio = str(args.ratio if args.ratio is not None else config.get("ratio", "16x9")).strip()
 
     params = {
-        "categories": str(args.categories if args.categories is not None else config.get("categories", "111")).strip(),
+        "categories": str(args.categories if args.categories is not None else config.get("categories", "100")).strip(),
         "purity": str(args.purity if args.purity is not None else config.get("purity", "100")).strip(),
         "sorting": str(args.sort if args.sort is not None else config.get("sort", "random")).strip(),
         "order": "desc",
@@ -376,7 +392,7 @@ def fetch_wallpaper_url(args, config):
         params["q"] = query
 
     if params["sorting"] == "toplist":
-        params["topRange"] = str(args.top_range if args.top_range is not None else config.get("top_range", "1M")).strip()
+        params["topRange"] = str(args.top_range if args.top_range is not None else config.get("top_range", "3M")).strip()
 
     url = f"https://wallhaven.cc/api/v1/search?{urllib.parse.urlencode(params)}"
 
@@ -604,13 +620,109 @@ def set_desktop_wallpaper(image_path):
 
     if os_name == "Windows":
         import ctypes
-        system_parameters_info = ctypes.windll.user32.SystemParametersInfoW
-        system_parameters_info.argtypes = (
-            ctypes.c_uint, ctypes.c_uint, ctypes.c_wchar_p, ctypes.c_uint,
+        class GUID(ctypes.Structure):
+            _fields_ = (
+                ("data1", ctypes.c_uint32),
+                ("data2", ctypes.c_uint16),
+                ("data3", ctypes.c_uint16),
+                ("data4", ctypes.c_ubyte * 8),
+            )
+
+        class_id = GUID(
+            0xC2CF3110, 0x460E, 0x4FC1,
+            (ctypes.c_ubyte * 8)(0xB9, 0xD0, 0x8A, 0x1C, 0x0C, 0x9C, 0xC4, 0xBD),
         )
-        system_parameters_info.restype = ctypes.c_bool
-        if not system_parameters_info(20, 0, abs_path, 3):
-            raise ctypes.WinError()
+        interface_id = GUID(
+            0xB92B56A9, 0x8B55, 0x4E14,
+            (ctypes.c_ubyte * 8)(0x9A, 0x89, 0x01, 0x99, 0xBB, 0xB6, 0xF9, 0x3B),
+        )
+        ole32 = ctypes.WinDLL("ole32")
+        ole32.CoInitializeEx.argtypes = (ctypes.c_void_p, ctypes.c_uint32)
+        ole32.CoInitializeEx.restype = ctypes.c_long
+        ole32.CoCreateInstance.argtypes = (
+            ctypes.POINTER(GUID), ctypes.c_void_p, ctypes.c_uint32,
+            ctypes.POINTER(GUID), ctypes.POINTER(ctypes.c_void_p),
+        )
+        ole32.CoCreateInstance.restype = ctypes.c_long
+        ole32.CoTaskMemFree.argtypes = (ctypes.c_void_p,)
+        ole32.CoTaskMemFree.restype = None
+        ole32.CoUninitialize.argtypes = ()
+        ole32.CoUninitialize.restype = None
+
+        com_status = ole32.CoInitializeEx(None, 0x2)
+        uninitialize_com = com_status in (0, 1)
+        if com_status < 0 and com_status != -2147417850:
+            raise OSError(
+                f"Could not initialize Windows wallpaper support "
+                f"(HRESULT 0x{com_status & 0xFFFFFFFF:08X})."
+            )
+
+        wallpaper_api = ctypes.c_void_p()
+        try:
+            com_status = ole32.CoCreateInstance(
+                ctypes.byref(class_id), None, 0x17, ctypes.byref(interface_id),
+                ctypes.byref(wallpaper_api),
+            )
+            if com_status in (-2147221164, -2147467262):
+                system_parameters_info = ctypes.windll.user32.SystemParametersInfoW
+                system_parameters_info.argtypes = (
+                    ctypes.c_uint, ctypes.c_uint, ctypes.c_wchar_p, ctypes.c_uint,
+                )
+                system_parameters_info.restype = ctypes.c_bool
+                if not system_parameters_info(20, 0, abs_path, 3):
+                    raise ctypes.WinError()
+            elif com_status < 0:
+                raise OSError(
+                    f"Could not access Windows wallpaper support "
+                    f"(HRESULT 0x{com_status & 0xFFFFFFFF:08X})."
+                )
+            else:
+                vtable = ctypes.cast(
+                    wallpaper_api, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p)),
+                ).contents
+                set_wallpaper = ctypes.WINFUNCTYPE(
+                    ctypes.c_long, ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_wchar_p,
+                )(vtable[3])
+                com_status = set_wallpaper(wallpaper_api, None, abs_path)
+                if com_status < 0:
+                    raise OSError(
+                        f"Windows could not set the desktop wallpaper "
+                        f"(HRESULT 0x{com_status & 0xFFFFFFFF:08X})."
+                    )
+
+                active_path_ptr = ctypes.c_void_p()
+                get_wallpaper = ctypes.WINFUNCTYPE(
+                    ctypes.c_long, ctypes.c_void_p, ctypes.c_wchar_p,
+                    ctypes.POINTER(ctypes.c_void_p),
+                )(vtable[4])
+                com_status = get_wallpaper(
+                    wallpaper_api, None, ctypes.byref(active_path_ptr),
+                )
+                try:
+                    if com_status < 0:
+                        raise OSError(
+                            f"Could not verify the Windows desktop wallpaper "
+                            f"(HRESULT 0x{com_status & 0xFFFFFFFF:08X})."
+                        )
+                    active_path = ctypes.wstring_at(active_path_ptr)
+                finally:
+                    if active_path_ptr:
+                        ole32.CoTaskMemFree(active_path_ptr)
+                if os.path.normcase(os.path.abspath(active_path)) != os.path.normcase(abs_path):
+                    raise OSError(
+                        f"Windows did not activate the requested wallpaper: {abs_path}"
+                    )
+        finally:
+            if wallpaper_api:
+                vtable = ctypes.cast(
+                    wallpaper_api, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p)),
+                ).contents
+                release = ctypes.WINFUNCTYPE(
+                    ctypes.c_ulong, ctypes.c_void_p,
+                )(vtable[2])
+                release(wallpaper_api)
+            if uninitialize_com:
+                ole32.CoUninitialize()
         log("🖥️ Wallpaper applied (Windows).")
 
     elif os_name == "Darwin":

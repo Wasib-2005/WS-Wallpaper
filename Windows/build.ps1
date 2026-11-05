@@ -1,5 +1,6 @@
 param(
-    [switch]$PortableOnly
+    [switch]$PortableOnly,
+    [switch]$Launch
 )
 
 $ErrorActionPreference = "Stop"
@@ -8,6 +9,23 @@ $outputRoot = Join-Path $repoRoot "dist"
 $bundleDir = Join-Path $outputRoot "WSWallpaper"
 $workRoot = Join-Path $PSScriptRoot "build-output"
 $iconPath = Join-Path $bundleDir "ws-wallpaper.ico"
+
+if (-not $PortableOnly) {
+    $compiler = Get-Command ISCC.exe -ErrorAction SilentlyContinue
+    if ($compiler) {
+        $compilerPath = $compiler.Source
+    } else {
+        $compilerPaths = @(
+            (Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 6\ISCC.exe"),
+            (Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"),
+            (Join-Path $env:ProgramFiles "Inno Setup 6\ISCC.exe")
+        )
+        $compilerPath = $compilerPaths | Where-Object { Test-Path $_ } | Select-Object -First 1
+        if (-not $compilerPath) {
+            throw "Inno Setup 6 is required to build the installer. Install it or pass -PortableOnly."
+        }
+    }
+}
 
 if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
     throw "Python 3 is required to build the Windows app."
@@ -58,10 +76,21 @@ $guiData = (Join-Path $repoRoot "Linux\wallpaper-manager") + ";."
 $cliData = (Join-Path $repoRoot "Linux\wallpaper") + ";."
 $iconData = $sourceIcon + ";."
 $guiHiddenImports = @(
+    "--hidden-import=collections",
+    "--hidden-import=json",
+    "--hidden-import=os",
+    "--hidden-import=re",
+    "--hidden-import=shutil",
+    "--hidden-import=subprocess",
+    "--hidden-import=sys",
+    "--hidden-import=threading",
     "--hidden-import=tkinter",
     "--hidden-import=tkinter.filedialog",
     "--hidden-import=tkinter.messagebox",
     "--hidden-import=tkinter.ttk",
+    "--hidden-import=urllib.error",
+    "--hidden-import=urllib.request",
+    "--hidden-import=webbrowser",
     "--hidden-import=PIL",
     "--hidden-import=PIL.Image",
     "--hidden-import=PIL.ImageTk"
@@ -71,7 +100,9 @@ $cliHiddenImports = @(
     "--hidden-import=collections",
     "--hidden-import=csv",
     "--hidden-import=ctypes",
+    "--hidden-import=hashlib",
     "--hidden-import=json",
+    "--hidden-import=math",
     "--hidden-import=os",
     "--hidden-import=platform",
     "--hidden-import=random",
@@ -101,16 +132,6 @@ if (Test-Path $portableArchive) {
 Compress-Archive -Path (Join-Path $bundleDir "*") -DestinationPath $portableArchive
 
 if (-not $PortableOnly) {
-    $compiler = Get-Command ISCC.exe -ErrorAction SilentlyContinue
-    if ($compiler) {
-        $compilerPath = $compiler.Source
-    } else {
-        $compilerPath = Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"
-        if (-not (Test-Path $compilerPath)) {
-            throw "Inno Setup 6 is required to build the installer. Install it or pass -PortableOnly."
-        }
-    }
-
     Push-Location $repoRoot
     try {
         & $compilerPath "Windows\installer.iss"
@@ -120,6 +141,14 @@ if (-not $PortableOnly) {
     } finally {
         Pop-Location
     }
+}
+
+if ($Launch) {
+    $guiExecutable = Join-Path $bundleDir "ws-wallpaper.exe"
+    if (-not (Test-Path $guiExecutable)) {
+        throw "Could not find the Windows app to launch at $guiExecutable."
+    }
+    Start-Process -FilePath $guiExecutable
 }
 
 Write-Host "Windows app files: $bundleDir"

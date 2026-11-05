@@ -30,6 +30,12 @@ SOURCE_LABELS = {
 }
 SOURCE_VALUES = {label: value for value, label in SOURCE_LABELS.items()}
 SOURCE_VALUES["Both (random)"] = "both"
+SOURCE_DESCRIPTIONS = {
+    "wallhaven": "Explore wallpapers from Wallhaven.",
+    "pixabay": "Discover safe landscape photos from Pixabay.",
+    "both": "Discover wallpapers from Wallhaven or Pixabay.",
+    "random": "Discover wallpapers from Wallhaven or Pixabay.",
+}
 
 def prepare_config_dir():
     if os.name == "nt":
@@ -58,16 +64,374 @@ CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 LOG_FILE = os.path.join(CONFIG_DIR, "wallpaper.log")
 SAVE_DIR = os.path.expanduser("~/Pictures/Wallhaven")
 IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp")
+DEFAULT_CONFIG = {
+    "query": "mountain",
+    "resolution": "1920x1080",
+    "ratio": "16x9",
+    "purity": "100",
+    "categories": "100",
+    "sort": "random",
+    "top_range": "3M",
+    "timer": 30.0,
+    "keep": 5,
+    "max_log_size": "1MB",
+    "source": "wallhaven",
+    "theme": "forest",
+    "ui_style": "Flat Design",
+}
 
-BG = "#101512"
-SIDEBAR = "#151d19"
-CARD = "#1c2621"
-CARD_ALT = "#222e27"
-ACCENT = "#c0ff3e"
-CYAN = "#22d3ee"
-TEXT = "#f2f6f3"
-MUTED = "#9aa89e"
-BORDER = "#2a3930"
+
+def make_palette(bg, surface, accent, text, muted, border, *,
+                 sidebar=None, secondary=None, active=None, cyan=None,
+                 primary_text=None):
+    return {
+        "BG": bg,
+        "SIDEBAR": sidebar or bg,
+        "CARD": surface,
+        "CARD_ALT": secondary or surface,
+        "ACCENT": accent,
+        "ACTIVE_PRIMARY": active or accent,
+        "PRIMARY_TEXT": primary_text or bg,
+        "CYAN": cyan or accent,
+        "TEXT": text,
+        "MUTED": muted,
+        "BORDER": border,
+    }
+
+
+def color_luminance(color):
+    if not isinstance(color, str) or not re.fullmatch(r"#[0-9a-fA-F]{6}", color):
+        return None
+    channels = [int(color[index:index + 2], 16) / 255 for index in (1, 3, 5)]
+    linear = [
+        channel / 12.92 if channel <= 0.04045
+        else ((channel + 0.055) / 1.055) ** 2.4
+        for channel in channels
+    ]
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+
+def contrast_ratio(foreground, background):
+    foreground_luminance = color_luminance(foreground)
+    background_luminance = color_luminance(background)
+    if foreground_luminance is None or background_luminance is None:
+        return None
+    lighter, darker = sorted((foreground_luminance, background_luminance), reverse=True)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+def contrast_safe_color(foreground, background, minimum=4.5):
+    ratio = contrast_ratio(foreground, background)
+    if ratio is None or ratio >= minimum:
+        return foreground
+    return max(("#000000", "#ffffff"), key=lambda color: contrast_ratio(color, background))
+
+
+THEME_PALETTES = {
+    "forest": {
+        "BG": "#101512", "SIDEBAR": "#151d19", "CARD": "#1c2621",
+        "CARD_ALT": "#222e27", "ACCENT": "#c0ff3e", "ACTIVE_PRIMARY": "#c9f99b",
+        "PRIMARY_TEXT": "#162015", "CYAN": "#22d3ee", "TEXT": "#f2f6f3",
+        "MUTED": "#9aa89e", "BORDER": "#2a3930",
+    },
+    "Ocean": {
+        "BG": "#101721", "SIDEBAR": "#151f2c", "CARD": "#1d2b3a",
+        "CARD_ALT": "#26394b", "ACCENT": "#6bd5ff", "ACTIVE_PRIMARY": "#a3e6ff",
+        "PRIMARY_TEXT": "#10202a", "CYAN": "#9bc8ff", "TEXT": "#f1f7fc",
+        "MUTED": "#a0b2c3", "BORDER": "#344a5e",
+    },
+    "Sunset": {
+        "BG": "#1b1514", "SIDEBAR": "#241a18", "CARD": "#332421",
+        "CARD_ALT": "#422e28", "ACCENT": "#ffad73", "ACTIVE_PRIMARY": "#ffd0a8",
+        "PRIMARY_TEXT": "#2b1912", "CYAN": "#f2a4b8", "TEXT": "#fff5ef",
+        "MUTED": "#c6aaa0", "BORDER": "#503a33",
+    },
+    "light": {
+        "BG": "#f3f5f2", "SIDEBAR": "#e6ebe6", "CARD": "#ffffff",
+        "CARD_ALT": "#e9eeea", "ACCENT": "#427a22", "ACTIVE_PRIMARY": "#d2e8c4",
+        "PRIMARY_TEXT": "#ffffff", "CYAN": "#176a78", "TEXT": "#18211b",
+        "MUTED": "#58665d", "BORDER": "#ccd5ce",
+    },
+    "High contrast": {
+        "BG": "#000000", "SIDEBAR": "#080808", "CARD": "#111111",
+        "CARD_ALT": "#202020", "ACCENT": "#ffff00", "ACTIVE_PRIMARY": "#ffff99",
+        "PRIMARY_TEXT": "#000000", "CYAN": "#00ffff", "TEXT": "#ffffff",
+        "MUTED": "#d0d0d0", "BORDER": "#8a8a8a",
+    },
+    "dark": make_palette(
+        "#101216", "#20242c", "#a78bfa", "#f4f6fa", "#b2b8c4", "#3b414d",
+        sidebar="#171a20", secondary="#2a2f39", cyan="#67e8f9",
+    ),
+    "cupcake": make_palette(
+        "#faf7f5", "#fffaf8", "#65c3c8", "#291334", "#827487", "#eadde4",
+        sidebar="#f2e9e9", secondary="#f3e8ee", cyan="#ef9fbc",
+    ),
+    "synthwave": make_palette(
+        "#1a103d", "#241553", "#e779c1", "#f9f7fd", "#b9a9d2", "#493078",
+        sidebar="#160d32", secondary="#321b68", active="#f09bd3", cyan="#58d5f0",
+    ),
+    "retro": make_palette(
+        "#e4d8b4", "#f2e6c6", "#ef9995", "#282425", "#71675a", "#c5b88f",
+        sidebar="#d9cba5", secondary="#e8d8ae", cyan="#a4cbb4",
+    ),
+    "cyberpunk": make_palette(
+        "#080b16", "#111729", "#ff4fd8", "#f5f7ff", "#9aa7c7", "#313b59",
+        sidebar="#0b1020", secondary="#1a2340", active="#ff81e6", cyan="#00f5d4",
+    ),
+    "valentine": make_palette(
+        "#f9e9f0", "#fff6fa", "#e96d9b", "#45283a", "#806475", "#ebcad9",
+        sidebar="#f2dce7", secondary="#f7e5ed", cyan="#ad79c4",
+    ),
+    "halloween": make_palette(
+        "#17120f", "#251a15", "#f28c28", "#fff3e6", "#b7a08e", "#4b3324",
+        sidebar="#201610", secondary="#382319", cyan="#a6c84a",
+    ),
+    "aqua": make_palette(
+        "#e8f8fb", "#f6feff", "#09b8a5", "#153a46", "#5a7c84", "#c0e5e9",
+        sidebar="#d8f1f3", secondary="#dff5f5", cyan="#438df1",
+    ),
+    "lofi": make_palette(
+        "#f1f0eb", "#faf9f5", "#808080", "#252525", "#696969", "#d4d2cb",
+        sidebar="#e7e5df", secondary="#e8e7e2", cyan="#596c83",
+    ),
+    "pastel": make_palette(
+        "#f5f0ff", "#fffaff", "#a78bfa", "#30294a", "#756d88", "#e0d6ef",
+        sidebar="#ebe5f8", secondary="#eee8f7", cyan="#61b8c5",
+    ),
+    "fantasy": make_palette(
+        "#f7f1e7", "#fffaf0", "#6b5b95", "#30283b", "#756c78", "#e2d5bf",
+        sidebar="#eee5d7", secondary="#eee6d8", cyan="#478b83",
+    ),
+    "wireframe": make_palette(
+        "#f8f8f8", "#ffffff", "#4b5563", "#202124", "#64676c", "#9ca3af",
+        sidebar="#ededed", secondary="#f0f0f0", cyan="#2563eb",
+    ),
+    "black": make_palette(
+        "#000000", "#0b0b0b", "#dedede", "#ffffff", "#b3b3b3", "#3a3a3a",
+        sidebar="#050505", secondary="#171717", cyan="#8be9fd",
+    ),
+    "luxury": make_palette(
+        "#100e0b", "#1a1712", "#d4b77a", "#f5eddd", "#b8aa91", "#40382a",
+        sidebar="#15120e", secondary="#282117", cyan="#b6a2cc",
+    ),
+    "dracula": make_palette(
+        "#282a36", "#343746", "#bd93f9", "#f8f8f2", "#b7b9c9", "#505365",
+        sidebar="#21222c", secondary="#44475a", cyan="#8be9fd",
+    ),
+    "cmyk": make_palette(
+        "#f3f5f6", "#ffffff", "#00a8d6", "#191919", "#60666b", "#cbd2d6",
+        sidebar="#e5eaed", secondary="#e9f0f2", cyan="#d40083",
+    ),
+    "autumn": make_palette(
+        "#211710", "#302117", "#d97736", "#fff2df", "#c2a990", "#59402d",
+        sidebar="#281b12", secondary="#432b1b", cyan="#789b72",
+    ),
+    "business": make_palette(
+        "#f1f4f8", "#ffffff", "#315b8a", "#17283c", "#5b6d80", "#d1dae4",
+        sidebar="#e3eaf1", secondary="#e8eef4", cyan="#167c80",
+    ),
+    "acid": make_palette(
+        "#10120b", "#191d10", "#d5ff00", "#f7fbe9", "#b1bc91", "#3d4820",
+        sidebar="#15180d", secondary="#272d16", cyan="#00e5c4",
+    ),
+    "lemonade": make_palette(
+        "#f7fbe8", "#fffff2", "#75a832", "#26351b", "#68765a", "#dce8b9",
+        sidebar="#ecf3d4", secondary="#eff5dc", cyan="#22a9a1",
+    ),
+    "night": make_palette(
+        "#0d1424", "#151e32", "#38bdf8", "#edf4ff", "#9aaac3", "#2b3a54",
+        sidebar="#10192a", secondary="#1e2b43", cyan="#a78bfa",
+    ),
+    "coffee": make_palette(
+        "#211a16", "#30251f", "#d6a77a", "#f5e9dc", "#b7a18e", "#594337",
+        sidebar="#281f1a", secondary="#3c2d24", cyan="#8fb8a3",
+    ),
+    "winter": make_palette(
+        "#eff6fc", "#ffffff", "#3975b7", "#19334e", "#60788e", "#d0deea",
+        sidebar="#e1edf6", secondary="#e5f0f7", cyan="#39aab4",
+    ),
+}
+THEME_NAMES = tuple(THEME_PALETTES)
+LEGACY_THEME_NAMES = {"Forest": "forest", "Light": "light"}
+UI_STYLE_NAMES = (
+    "Flat Design",
+    "Glassmorphism",
+    "Neomorphism",
+    "Bento Grid",
+    "Brutalism / Neo-Brutalism",
+    "Dark Mode Design",
+    "Skeuomorphism",
+    "Retro-Futuristic / Cyberpunk",
+)
+UI_STYLE_DESCRIPTIONS = {
+    "Flat Design": "Minimal 2D surfaces, bright palette accents, clean type, no heavy shadows.",
+    "Glassmorphism": "A wide welcome panel sits above an oversized gallery, with rotation and stats in a side column.",
+    "Neomorphism": "Softly raised surfaces pair a personal welcome with stacked stats and a compact gallery.",
+    "Bento Grid": "A modular dashboard that gives the welcome, rotation, stats, and library their own grid cells.",
+    "Brutalism / Neo-Brutalism": "An asymmetric, high-contrast dashboard with a bold outline and an oversized library.",
+    "Dark Mode Design": "A media-first dashboard that puts your latest wallpaper above the controls.",
+    "Skeuomorphism": "A framed gallery sits beside a stacked control deck, with tactile raised surfaces.",
+    "Retro-Futuristic / Cyberpunk": "A technical control deck leads into a full-width gallery, with compact readouts below.",
+}
+THEME_DESCRIPTIONS = {
+    "forest": "Deep green surfaces with bright lime and cyan accents.",
+    "Ocean": "Cool navy-blue surfaces with sky-blue and pale-cyan accents.",
+    "Sunset": "Warm, dark brown surfaces with coral and peach accents.",
+    "light": "Bright neutral surfaces with leafy green accents.",
+    "High contrast": "Pure black surfaces with bright yellow and cyan accents.",
+    "dark": "Charcoal surfaces with violet and cyan accents.",
+    "cupcake": "Soft cream surfaces with teal and pink accents.",
+    "synthwave": "Deep violet surfaces with hot pink and electric-cyan accents.",
+    "retro": "Warm paper tones with coral and mint accents.",
+    "cyberpunk": "Near-black navy surfaces with neon pink and teal accents.",
+    "valentine": "Blush-pink surfaces with rose and lavender accents.",
+    "halloween": "Dark brown surfaces with orange and lime accents.",
+    "aqua": "Pale aqua surfaces with teal and blue accents.",
+    "lofi": "Warm off-white surfaces with muted gray and blue accents.",
+    "pastel": "Soft lavender surfaces with purple and teal accents.",
+    "fantasy": "Warm ivory surfaces with plum and sage accents.",
+    "wireframe": "Clean white surfaces with graphite borders and blue accents.",
+    "black": "True-black surfaces with white and cyan accents.",
+    "luxury": "Near-black brown surfaces with gold and lavender accents.",
+    "dracula": "Charcoal-purple surfaces with violet and cyan accents.",
+    "cmyk": "Paper-white surfaces with cyan and magenta accents.",
+    "autumn": "Dark earth-brown surfaces with orange and sage accents.",
+    "business": "Cool pale-blue surfaces with navy and teal accents.",
+    "acid": "Deep olive surfaces with electric lime and teal accents.",
+    "lemonade": "Pale citrus surfaces with leaf-green and teal accents.",
+    "night": "Midnight-blue surfaces with sky-blue and violet accents.",
+    "coffee": "Dark coffee-brown surfaces with tan and sage accents.",
+    "winter": "Cool white-blue surfaces with cobalt and aqua accents.",
+}
+OVERVIEW_COPY = {
+    "Flat Design": {
+        "kicker": "YOUR DESKTOP, REIMAGINED",
+        "headline": "Find your next\nfavorite view.",
+        "service": "AUTOMATIC ROTATION",
+        "collection": "Your wallpaper collection",
+        "saved": "Saved locally",
+        "stats": ("IN YOUR LIBRARY", "ROTATION FREQUENCY", "IMAGE QUALITY"),
+    },
+    "Glassmorphism": {
+        "kicker": "A CLEARER VIEW",
+        "headline": "Let a new\nscene in.",
+        "service": "ROTATION STATUS",
+        "collection": "Your gallery",
+        "saved": "Your saved views",
+        "stats": ("GALLERY SIZE", "NEXT CHANGE", "IMAGE RESOLUTION"),
+    },
+    "Neomorphism": {
+        "kicker": "YOUR PERSONAL GALLERY",
+        "headline": "Make room for\na fresh view.",
+        "service": "YOUR ROTATION",
+        "collection": "Saved wallpapers",
+        "saved": "In your collection",
+        "stats": ("COLLECTION SIZE", "ROTATION TIMER", "IMAGE RESOLUTION"),
+    },
+    "Bento Grid": {
+        "kicker": "A DESKTOP, CURATED",
+        "headline": "Find a view\nworth keeping.",
+        "service": "ROTATION",
+        "collection": "Your wallpaper board",
+        "saved": "Saved to your library",
+        "stats": ("WALLPAPERS", "SCHEDULE", "RESOLUTION"),
+    },
+    "Brutalism / Neo-Brutalism": {
+        "kicker": "WALLPAPER / NO. 01",
+        "headline": "Make your\nscreen count.",
+        "service": "ROTATION / STATUS",
+        "collection": "THE WALLPAPER STACK",
+        "saved": "LOCAL FILES",
+        "stats": ("FILES / SAVED", "TIMER / SET", "RESOLUTION / PX"),
+    },
+    "Dark Mode Design": {
+        "kicker": "ON YOUR SCREEN",
+        "headline": "A new view,\nready when you are.",
+        "service": "ROTATION STATUS",
+        "collection": "On your screen",
+        "saved": "Saved on this device",
+        "stats": ("SAVED WALLPAPERS", "ROTATION TIMER", "IMAGE RESOLUTION"),
+    },
+    "Skeuomorphism": {
+        "kicker": "THE WALLPAPER ROOM",
+        "headline": "A collection\nof changing views.",
+        "service": "ROTATION CONTROL",
+        "collection": "Your wallpaper album",
+        "saved": "On this device",
+        "stats": ("IN YOUR ALBUM", "CHANGE INTERVAL", "PICTURE SIZE"),
+    },
+    "Retro-Futuristic / Cyberpunk": {
+        "kicker": "DISPLAY SYSTEM // WS",
+        "headline": "Load a new\nvisual signal.",
+        "service": "ROTATION // STATUS",
+        "collection": "LOCAL IMAGE ARCHIVE",
+        "saved": "STORED LOCALLY",
+        "stats": ("ARCHIVE // ITEMS", "TIMER // INTERVAL", "OUTPUT // RESOLUTION"),
+    },
+}
+UI_STYLE_CARD_STYLES = {
+    "Flat Design": ("flat", 0, 0),
+    "Glassmorphism": ("ridge", 2, 1),
+    "Neomorphism": ("raised", 4, 0),
+    "Bento Grid": ("flat", 1, 1),
+    "Brutalism / Neo-Brutalism": ("solid", 3, 0),
+    "Dark Mode Design": ("flat", 0, 1),
+    "Skeuomorphism": ("ridge", 4, 1),
+    "Retro-Futuristic / Cyberpunk": ("ridge", 2, 1),
+}
+UI_STYLE_BUTTON_STYLES = {
+    "Flat Design": ("flat", 0),
+    "Glassmorphism": ("raised", 1),
+    "Neomorphism": ("raised", 3),
+    "Bento Grid": ("flat", 0),
+    "Brutalism / Neo-Brutalism": ("solid", 3),
+    "Dark Mode Design": ("flat", 0),
+    "Skeuomorphism": ("raised", 3),
+    "Retro-Futuristic / Cyberpunk": ("raised", 1),
+}
+UI_STYLE_BORDER_COLORS = {
+    "Brutalism / Neo-Brutalism": "#111111",
+    "Retro-Futuristic / Cyberpunk": "accent",
+}
+
+
+def set_theme_palette(name):
+    global BG, SIDEBAR, CARD, CARD_ALT, ACCENT, ACTIVE_PRIMARY
+    global PRIMARY_TEXT, CYAN, TEXT, MUTED, BORDER, CURRENT_THEME
+
+    name = LEGACY_THEME_NAMES.get(name, name)
+    if name not in THEME_PALETTES:
+        name = "forest"
+    palette = THEME_PALETTES[name]
+    BG = palette["BG"]
+    SIDEBAR = palette["SIDEBAR"]
+    CARD = palette["CARD"]
+    CARD_ALT = palette["CARD_ALT"]
+    ACCENT = palette["ACCENT"]
+    ACTIVE_PRIMARY = palette["ACTIVE_PRIMARY"]
+    PRIMARY_TEXT = palette["PRIMARY_TEXT"]
+    CYAN = palette["CYAN"]
+    TEXT = palette["TEXT"]
+    MUTED = palette["MUTED"]
+    BORDER = palette["BORDER"]
+    if CURRENT_UI_STYLE == "Dark Mode Design":
+        BG = "#101216"
+        SIDEBAR = "#171a20"
+        CARD = "#20242c"
+        CARD_ALT = "#2a2f39"
+        TEXT = "#f4f6fa"
+        MUTED = "#b2b8c4"
+        BORDER = "#3b414d"
+    CURRENT_THEME = name
+
+
+def set_ui_style(name):
+    global CURRENT_UI_STYLE
+    CURRENT_UI_STYLE = name if name in UI_STYLE_NAMES else "Flat Design"
+
+
+set_ui_style("Flat Design")
+set_theme_palette("Forest")
 
 
 def find_cli():
@@ -91,6 +455,10 @@ class WallpaperManager:
         self.root = root
         self.cli = find_cli()
         self.config = self.load_config()
+        saved_theme = self.config.get("theme", "forest")
+        legacy_style = saved_theme if saved_theme in UI_STYLE_NAMES else None
+        set_ui_style(self.config.get("ui_style", legacy_style or "Flat Design"))
+        set_theme_palette("Forest" if legacy_style else saved_theme)
         configured_dir = self.config.get("save_dir", SAVE_DIR)
         self.save_dir = os.path.abspath(os.path.expanduser(str(configured_dir)))
         self.page = "Overview"
@@ -121,13 +489,19 @@ class WallpaperManager:
     def configure_styles(self):
         style = ttk.Style()
         style.theme_use("clam")
+        combo_text = contrast_safe_color(TEXT, CARD_ALT)
         style.configure("TCombobox", fieldbackground=CARD_ALT, background=CARD_ALT,
-                        foreground=TEXT, arrowcolor=ACCENT, bordercolor=BORDER,
+                        foreground=combo_text,
+                        arrowcolor=contrast_safe_color(ACCENT, CARD_ALT),
+                        bordercolor=BORDER,
                         lightcolor=BORDER, darkcolor=BORDER, padding=9)
         style.map("TCombobox", fieldbackground=[("readonly", CARD_ALT)],
-                  foreground=[("readonly", TEXT)])
+                  foreground=[("readonly", combo_text)],
+                  selectbackground=[("readonly", CARD_ALT)],
+                  selectforeground=[("readonly", combo_text)])
         style.configure("Vertical.TScrollbar", background=CARD_ALT,
-                        troughcolor=BG, arrowcolor=MUTED, bordercolor=BG)
+                        troughcolor=BG,
+                        arrowcolor=contrast_safe_color(MUTED, BG), bordercolor=BG)
 
     def icon_path(self):
         candidates = (
@@ -153,7 +527,18 @@ class WallpaperManager:
 
     def load_config(self):
         if not os.path.exists(CONFIG_FILE):
-            return {}
+            config = dict(DEFAULT_CONFIG)
+            os.makedirs(CONFIG_DIR, exist_ok=True)
+            temporary_file = CONFIG_FILE + ".tmp"
+            try:
+                with open(temporary_file, "w", encoding="utf-8") as config_file:
+                    json.dump(config, config_file, indent=4)
+                os.replace(temporary_file, CONFIG_FILE)
+            except OSError as error:
+                raise RuntimeError(
+                    f"Could not create default settings at {CONFIG_FILE}: {error}"
+                ) from error
+            return config
         try:
             with open(CONFIG_FILE, "r", encoding="utf-8") as config_file:
                 config = json.load(config_file)
@@ -199,6 +584,8 @@ class WallpaperManager:
                 command=lambda page=name: self.show_page(page),
             )
             button.pack(fill="x", padx=14, pady=3)
+            button._wallpaper_button = True
+            button._wallpaper_nav = True
             self.nav_buttons[name] = button
 
         spacer = tk.Frame(sidebar, bg=SIDEBAR)
@@ -239,10 +626,7 @@ class WallpaperManager:
             child.destroy()
         self.page_title.configure(text=name)
         for nav_name, button in self.nav_buttons.items():
-            active = nav_name == name
-            button.configure(bg=CARD_ALT if active else SIDEBAR,
-                             fg=ACCENT if active else MUTED,
-                             activebackground=CARD_ALT, activeforeground=TEXT)
+            self.style_navigation_button(button, nav_name == name)
         if name == "Overview":
             self.build_overview()
         elif name == "Library":
@@ -251,11 +635,12 @@ class WallpaperManager:
             self.build_preferences()
         else:
             self.build_activity()
+        self.apply_contrast_to_tree(self.root)
         if name == "Overview":
             self.refresh_overview()
 
     def preference_snapshot(self):
-        return (
+        snapshot = (
             self.query_var.get(),
             self.resolution_var.get(),
             self.ratio_var.get(),
@@ -268,8 +653,10 @@ class WallpaperManager:
             self.pixabay_key_var.get(),
             tuple(variable.get() for variable in self.timer_vars),
             self.keep_var.get(),
+            self.max_log_size_var.get(),
             self.save_dir_var.get(),
         )
+        return snapshot + (self.ui_style_var.get(), self.theme_var.get())
 
     def has_unsaved_preferences(self):
         return (
@@ -315,6 +702,17 @@ class WallpaperManager:
             self.save_preferences(on_saved=lambda: finish(True))
 
         def discard_and_leave():
+            saved_theme = self.config.get("theme", "forest")
+            saved_style = self.config.get("ui_style", "Flat Design")
+            if saved_theme in UI_STYLE_NAMES:
+                saved_theme, saved_style = "forest", saved_theme
+            if saved_theme not in THEME_PALETTES:
+                saved_theme = "forest"
+            if saved_style not in UI_STYLE_NAMES:
+                saved_style = "Flat Design"
+            self.theme_var.set(saved_theme)
+            self.ui_style_var.set(saved_style)
+            self.apply_selected_theme()
             self.saved_preference_snapshot = self.preference_snapshot()
             finish(True)
 
@@ -426,44 +824,140 @@ class WallpaperManager:
             )
 
     def card(self, parent, **kwargs):
-        return tk.Frame(parent, bg=CARD, highlightthickness=1,
-                        highlightbackground=BORDER, **kwargs)
+        relief, border_width, highlight_width = UI_STYLE_CARD_STYLES.get(
+            CURRENT_UI_STYLE, ("flat", 0, 0)
+        )
+        border_color = UI_STYLE_BORDER_COLORS.get(CURRENT_UI_STYLE, BORDER)
+        if border_color == "accent":
+            border_color = ACCENT
+        frame = tk.Frame(
+            parent, bg=CARD, relief=relief, bd=border_width,
+            highlightthickness=highlight_width, highlightbackground=border_color,
+            **kwargs,
+        )
+        frame._wallpaper_card = True
+        return frame
 
     def label(self, parent, text, *, color=TEXT, size=10, bold=False, **kwargs):
+        if CURRENT_UI_STYLE == "Brutalism / Neo-Brutalism":
+            bold = True
+        font = "TkFixedFont" if CURRENT_UI_STYLE == "Retro-Futuristic / Cyberpunk" else "TkDefaultFont"
         return tk.Label(parent, text=text, bg=parent.cget("bg"), fg=color,
-                        font=("TkDefaultFont", size, "bold" if bold else "normal"),
+                        font=(font, size, "bold" if bold else "normal"),
                         **kwargs)
 
     def button(self, parent, text, command, *, primary=False, compact=False):
-        return tk.Button(
-            parent, text=text, command=command, relief="flat", bd=0,
+        relief, border_width = UI_STYLE_BUTTON_STYLES.get(
+            CURRENT_UI_STYLE, ("flat", 0)
+        )
+        highlight_width = 1 if CURRENT_UI_STYLE in (
+            "Glassmorphism", "Skeuomorphism", "Retro-Futuristic / Cyberpunk"
+        ) else 0
+        border_color = UI_STYLE_BORDER_COLORS.get(CURRENT_UI_STYLE, BORDER)
+        if border_color == "accent":
+            border_color = ACCENT
+        button = tk.Button(
+            parent, text=text, command=command, relief=relief, bd=border_width,
+            highlightthickness=highlight_width, highlightbackground=border_color,
             bg=ACCENT if primary else CARD_ALT,
-            fg="#162015" if primary else TEXT,
-            activebackground="#c9f99b" if primary else BORDER,
-            activeforeground="#162015" if primary else TEXT,
+            fg=PRIMARY_TEXT if primary else TEXT,
+            activebackground=ACTIVE_PRIMARY if primary else BORDER,
+            activeforeground=PRIMARY_TEXT if primary else TEXT,
             cursor="hand2", padx=16 if not compact else 11,
             pady=10 if not compact else 7,
-            font=("TkDefaultFont", 10, "bold"),
+            font=(
+                "TkFixedFont" if CURRENT_UI_STYLE == "Retro-Futuristic / Cyberpunk"
+                else "TkDefaultFont",
+                10, "bold",
+            ),
         )
+        button._wallpaper_button = True
+        return button
+
+    def style_navigation_button(self, button, active):
+        relief, border_width = UI_STYLE_BUTTON_STYLES.get(
+            CURRENT_UI_STYLE, ("flat", 0)
+        )
+        highlight_width = 1 if CURRENT_UI_STYLE in (
+            "Glassmorphism", "Skeuomorphism", "Retro-Futuristic / Cyberpunk"
+        ) else 0
+        border_color = UI_STYLE_BORDER_COLORS.get(CURRENT_UI_STYLE, BORDER)
+        if border_color == "accent":
+            border_color = ACCENT
+        font = "TkFixedFont" if CURRENT_UI_STYLE == "Retro-Futuristic / Cyberpunk" else "TkDefaultFont"
+        bold = active or CURRENT_UI_STYLE == "Brutalism / Neo-Brutalism"
+        button.configure(
+            bg=CARD_ALT if active else SIDEBAR,
+            fg=ACCENT if active else MUTED,
+            activebackground=CARD_ALT,
+            activeforeground=TEXT,
+            relief=relief,
+            bd=border_width,
+            highlightthickness=highlight_width,
+            highlightbackground=border_color,
+            highlightcolor=ACCENT,
+            font=(font, 11, "bold" if bold else "normal"),
+        )
+        self.apply_widget_contrast(button)
+
+    @staticmethod
+    def apply_widget_contrast(widget):
+        for foreground_option, background_option in (
+            ("fg", "bg"),
+            ("activeforeground", "activebackground"),
+            ("selectforeground", "selectbackground"),
+            ("insertbackground", "bg"),
+        ):
+            try:
+                foreground = widget.cget(foreground_option)
+                background = widget.cget(background_option)
+                readable_foreground = contrast_safe_color(foreground, background)
+                if readable_foreground != foreground:
+                    widget.configure(**{foreground_option: readable_foreground})
+            except tk.TclError:
+                continue
+
+    @classmethod
+    def apply_contrast_to_tree(cls, widget):
+        cls.apply_widget_contrast(widget)
+        for child in widget.winfo_children():
+            cls.apply_contrast_to_tree(child)
 
     def build_overview(self):
-        top = tk.Frame(self.body, bg=BG)
-        top.pack(fill="x", pady=(0, 16))
-        greeting = self.card(top)
-        greeting.pack(side="left", fill="both", expand=True, padx=(0, 8))
-        self.label(greeting, "YOUR DESKTOP, REIMAGINED", color=ACCENT,
+        layout = tk.Frame(self.body, bg=BG)
+        layout.pack(fill="both", expand=True)
+        custom_layout = CURRENT_UI_STYLE in (
+            "Glassmorphism", "Neomorphism", "Bento Grid", "Dark Mode Design",
+            "Brutalism / Neo-Brutalism", "Skeuomorphism",
+            "Retro-Futuristic / Cyberpunk",
+        )
+        if custom_layout:
+            card_parent = layout
+        else:
+            top = tk.Frame(layout, bg=BG)
+            top.pack(fill="x", pady=(0, 16))
+            card_parent = top
+
+        overview_copy = OVERVIEW_COPY[CURRENT_UI_STYLE]
+        greeting = self.card(card_parent)
+        self.label(greeting, overview_copy["kicker"], color=ACCENT,
                    size=9, bold=True).pack(anchor="w", padx=22, pady=(20, 8))
-        self.label(greeting, "Find your next\nfavorite view.", size=22,
+        title_size = 27 if CURRENT_UI_STYLE == "Brutalism / Neo-Brutalism" else 22
+        self.label(greeting, overview_copy["headline"], size=title_size,
                    bold=True, justify="left").pack(anchor="w", padx=22)
-        self.label(greeting, "Discover beautiful wallpapers from Wallhaven.",
+        source = self.config.get("source", "wallhaven")
+        source_description = SOURCE_DESCRIPTIONS.get(
+            source, SOURCE_DESCRIPTIONS["wallhaven"]
+        )
+        self.label(greeting, source_description,
                    color=MUTED, size=10).pack(anchor="w", padx=22, pady=(8, 18))
         self.button(greeting, "Change wallpaper  →", self.change_now,
                     primary=True).pack(anchor="w", padx=22, pady=(0, 20))
 
-        service = self.card(top, width=245)
-        service.pack(side="right", fill="y")
+        service = self.card(card_parent, width=245)
+        service.configure(height=180)
         service.pack_propagate(False)
-        self.label(service, "AUTOMATIC ROTATION", color=MUTED,
+        self.label(service, overview_copy["service"], color=MUTED,
                    size=9, bold=True).pack(anchor="w", padx=18, pady=(20, 8))
         self.service_label = tk.Label(service, textvariable=self.service_text,
                                       bg=CARD, fg=TEXT, font=("TkDefaultFont", 15, "bold"))
@@ -474,33 +968,144 @@ class WallpaperManager:
         self.button(service, "Manage rotation", lambda: self.show_page("Preferences"),
                     compact=True).pack(anchor="w", padx=18, pady=(0, 18))
 
-        library = self.card(self.body)
-        library.pack(fill="both", expand=True, pady=(0, 15))
+        library = self.card(layout)
         title_row = tk.Frame(library, bg=CARD)
         title_row.pack(fill="x", padx=20, pady=(18, 12))
-        self.label(title_row, "Your wallpaper collection", size=13, bold=True).pack(side="left")
-        self.label(title_row, "Saved locally", color=MUTED, size=9).pack(side="right")
-        self.preview_area = tk.Frame(library, bg=CARD, height=280)
-        self.preview_area.pack(fill="both", expand=True, padx=20, pady=(0, 12))
-        self.preview_area.pack_propagate(False)
-        self.preview_label = tk.Label(self.preview_area, bg=CARD_ALT, fg=MUTED,
-                                      text="No wallpapers saved yet\n\nChoose “Change wallpaper” to discover your first one.",
-                                      font=("TkDefaultFont", 11), justify="center")
-        self.preview_label.pack(fill="both", expand=True)
+        self.label(title_row, overview_copy["collection"], size=13, bold=True).pack(side="left")
+        self.label(title_row, overview_copy["saved"], color=MUTED, size=9).pack(side="right")
         footer = tk.Frame(library, bg=CARD)
         footer.pack(fill="x", padx=20, pady=(0, 17))
         self.collection_label = self.label(footer, "", color=MUTED, size=9)
         self.collection_label.pack(side="left")
         self.button(footer, "Open library", lambda: self.show_page("Library"),
                     compact=True).pack(side="right")
+        preview_height = {
+            "Dark Mode Design": 270,
+            "Skeuomorphism": 230,
+        }.get(CURRENT_UI_STYLE, 190 if custom_layout else 280)
+        self.preview_area = tk.Frame(library, bg=CARD, height=preview_height)
+        self.preview_area.pack(fill="both", expand=True, padx=20, pady=(0, 12))
+        self.preview_area.pack_propagate(False)
+        self.preview_label = tk.Label(self.preview_area, bg=CARD_ALT, fg=MUTED,
+                                      text="No wallpapers saved yet\n\nChoose “Change wallpaper” to discover your first one.",
+                                      font=("TkDefaultFont", 11), justify="center")
+        self.preview_label.pack(fill="both", expand=True)
 
-        stats = tk.Frame(self.body, bg=BG)
-        stats.pack(fill="x")
-        self.stat_count = self.stat_card(stats, "IN YOUR LIBRARY", "0 wallpapers")
-        self.stat_schedule = self.stat_card(stats, "ROTATION FREQUENCY", "Not scheduled")
-        self.stat_quality = self.stat_card(stats, "IMAGE QUALITY", "1920 × 1080")
+        stats = self.make_overview_stats(layout)
+        if CURRENT_UI_STYLE == "Bento Grid":
+            self.build_bento_overview(layout, greeting, service, library, stats)
+        elif CURRENT_UI_STYLE == "Brutalism / Neo-Brutalism":
+            self.build_brutalist_overview(layout, greeting, service, library, stats)
+        elif CURRENT_UI_STYLE == "Retro-Futuristic / Cyberpunk":
+            self.build_cyberpunk_overview(layout, greeting, service, library, stats)
+        elif CURRENT_UI_STYLE == "Dark Mode Design":
+            self.build_dark_mode_overview(layout, greeting, service, library, stats)
+        elif CURRENT_UI_STYLE == "Skeuomorphism":
+            self.build_skeuomorphic_overview(layout, greeting, service, library, stats)
+        elif CURRENT_UI_STYLE == "Neomorphism":
+            self.build_tactile_overview(layout, greeting, service, library, stats)
+        elif CURRENT_UI_STYLE == "Glassmorphism":
+            self.build_glass_overview(layout, greeting, service, library, stats)
+        else:
+            self.build_standard_overview(layout, greeting, service, library, stats)
+
+    def make_overview_stats(self, parent):
+        stats = tk.Frame(parent, bg=BG)
+        labels = OVERVIEW_COPY[CURRENT_UI_STYLE]["stats"]
+        self.stat_count = self.stat_card(stats, labels[0], "0 wallpapers")
+        self.stat_schedule = self.stat_card(stats, labels[1], "Not scheduled")
+        self.stat_quality = self.stat_card(stats, labels[2], "1920 × 1080")
+        return stats
+
+    def build_standard_overview(self, layout, greeting, service, library, stats):
+        greeting.pack(side="left", fill="both", expand=True, padx=(0, 8))
+        service.pack(side="right", fill="y")
+        stats.pack(fill="x", pady=(0, 12))
         for item in (self.stat_count, self.stat_schedule, self.stat_quality):
             item.pack(side="left", fill="x", expand=True, padx=(0, 10))
+        library.pack(fill="both", expand=True, pady=(0, 15))
+
+    def build_bento_overview(self, grid, greeting, service, library, stats):
+        grid.grid_columnconfigure(0, weight=2, uniform="bento")
+        grid.grid_columnconfigure(1, weight=1, uniform="bento")
+        grid.grid_columnconfigure(2, weight=1, uniform="bento")
+        grid.grid_rowconfigure(2, weight=1)
+        greeting.grid(row=0, column=0, columnspan=2, sticky="nsew", padx=(0, 8), pady=(0, 8))
+        service.grid(row=0, column=2, sticky="nsew", pady=(0, 8))
+        stats.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(0, 8))
+        for column, item in enumerate((self.stat_count, self.stat_schedule, self.stat_quality)):
+            item.pack(side="left", fill="x", expand=True, padx=(0, 8 if column < 2 else 0))
+        library.grid(row=2, column=0, columnspan=3, sticky="nsew")
+
+    def build_brutalist_overview(self, grid, greeting, service, library, stats):
+        grid.grid_columnconfigure(0, weight=3, uniform="brutalist")
+        grid.grid_columnconfigure(1, weight=2, uniform="brutalist")
+        grid.grid_columnconfigure(2, weight=1, uniform="brutalist")
+        grid.grid_rowconfigure(1, weight=1)
+        grid.grid_rowconfigure(2, weight=2)
+        greeting.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 14))
+        library.grid(row=1, column=0, rowspan=2, sticky="nsew", padx=(0, 14))
+        service.grid(row=1, column=1, columnspan=2, sticky="ew", pady=(0, 14))
+        stats.grid(row=2, column=1, columnspan=2, sticky="nsew")
+        for item in (self.stat_count, self.stat_schedule, self.stat_quality):
+            item.pack(fill="x", expand=True, pady=(0, 6))
+
+    def build_cyberpunk_overview(self, grid, greeting, service, library, stats):
+        grid.grid_columnconfigure(0, weight=3, uniform="cyber")
+        grid.grid_columnconfigure(1, weight=2, uniform="cyber")
+        grid.grid_rowconfigure(1, weight=1)
+        service.grid(row=0, column=0, sticky="ew", padx=(0, 10), pady=(0, 10))
+        greeting.grid(row=0, column=1, sticky="ew", pady=(0, 10))
+        library.grid(row=1, column=0, columnspan=2, sticky="nsew", pady=(0, 10))
+        stats.grid(row=2, column=0, columnspan=2, sticky="ew")
+        for item in (self.stat_count, self.stat_schedule, self.stat_quality):
+            item.pack(side="left", fill="x", expand=True, padx=(0, 8))
+
+    def build_tactile_overview(self, grid, greeting, service, library, stats):
+        grid.grid_columnconfigure(0, weight=3, uniform="tactile")
+        grid.grid_columnconfigure(1, weight=2, uniform="tactile")
+        grid.grid_rowconfigure(0, weight=1)
+        grid.grid_rowconfigure(1, weight=3)
+        greeting.grid(row=0, column=0, sticky="nsew", padx=(0, 12), pady=(0, 12))
+        service.grid(row=0, column=1, sticky="nsew", pady=(0, 12))
+        stats.grid(row=1, column=0, sticky="nsew", padx=(0, 12))
+        for item in (self.stat_count, self.stat_schedule, self.stat_quality):
+            item.pack(fill="x", expand=True, pady=(0, 8))
+        library.grid(row=1, column=1, sticky="nsew")
+
+    def build_dark_mode_overview(self, grid, greeting, service, library, stats):
+        grid.grid_columnconfigure(0, weight=3, uniform="dark")
+        grid.grid_columnconfigure(1, weight=2, uniform="dark")
+        grid.grid_rowconfigure(0, weight=4)
+        library.grid(row=0, column=0, columnspan=2, sticky="nsew", pady=(0, 10))
+        greeting.grid(row=1, column=0, sticky="nsew", padx=(0, 10), pady=(0, 10))
+        service.grid(row=1, column=1, sticky="nsew", pady=(0, 10))
+        stats.grid(row=2, column=0, columnspan=2, sticky="ew")
+        for item in (self.stat_count, self.stat_schedule, self.stat_quality):
+            item.pack(side="left", fill="x", expand=True, padx=(0, 8))
+
+    def build_skeuomorphic_overview(self, grid, greeting, service, library, stats):
+        grid.grid_columnconfigure(0, weight=2, uniform="skeuomorphic")
+        grid.grid_columnconfigure(1, weight=3, uniform="skeuomorphic")
+        grid.grid_rowconfigure(0, weight=2)
+        grid.grid_rowconfigure(1, weight=1)
+        grid.grid_rowconfigure(2, weight=1)
+        greeting.grid(row=0, column=0, sticky="nsew", padx=(0, 12), pady=(0, 12))
+        service.grid(row=1, column=0, sticky="nsew", padx=(0, 12), pady=(0, 12))
+        stats.grid(row=2, column=0, sticky="nsew", padx=(0, 12))
+        library.grid(row=0, column=1, rowspan=3, sticky="nsew")
+        for item in (self.stat_count, self.stat_schedule, self.stat_quality):
+            item.pack(fill="x", expand=True, pady=(0, 6))
+
+    def build_glass_overview(self, grid, greeting, service, library, stats):
+        grid.grid_columnconfigure(0, weight=1, uniform="glass")
+        grid.grid_columnconfigure(1, weight=2, uniform="glass")
+        greeting.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 12))
+        service.grid(row=1, column=0, sticky="nsew", padx=(0, 12), pady=(0, 12))
+        stats.grid(row=2, column=0, sticky="nsew", padx=(0, 12))
+        library.grid(row=1, column=1, rowspan=2, sticky="nsew")
+        for item in (self.stat_count, self.stat_schedule, self.stat_quality):
+            item.pack(fill="x", expand=True, pady=(0, 6))
 
     def stat_card(self, parent, title, value):
         frame = self.card(parent)
@@ -729,16 +1334,66 @@ class WallpaperManager:
 
         tk.Label(form, text="Tune what shows up on your desktop.", bg=BG, fg=MUTED,
                  font=("TkDefaultFont", 10)).pack(anchor="w", pady=(0, 15))
+        self.ui_style_var = tk.StringVar(value=CURRENT_UI_STYLE)
+        self.theme_var = tk.StringVar(value=CURRENT_THEME)
+        appearance = self.card(form)
+        appearance.pack(fill="x", pady=(0, 12))
+        self.section_heading(
+            appearance, "APPEARANCE", "Choose a visual style for the desktop app."
+        )
+        theme_controls = tk.Frame(appearance, bg=CARD)
+        theme_controls.pack(fill="x", padx=20, pady=(0, 18))
+        style_combo = self.add_combo(
+            theme_controls, "UI style / layout", self.ui_style_var,
+            UI_STYLE_NAMES, 0, 0,
+        )
+        style_combo.bind("<<ComboboxSelected>>", self.apply_selected_theme, add="+")
+        self.ui_style_description = tk.Label(
+            theme_controls, text=UI_STYLE_DESCRIPTIONS[CURRENT_UI_STYLE],
+            bg=CARD, fg=MUTED, font=("TkDefaultFont", 9), wraplength=300,
+        )
+        self.ui_style_description.grid(row=1, column=0, sticky="w", padx=5, pady=(3, 0))
+        color_combo = self.add_combo(
+            theme_controls, "Color palette", self.theme_var, THEME_NAMES, 0, 1
+        )
+        color_combo.bind("<<ComboboxSelected>>", self.apply_selected_theme, add="+")
+        self.theme_description = tk.Label(
+            theme_controls, text=THEME_DESCRIPTIONS.get(
+                CURRENT_THEME, f"{CURRENT_THEME.title()} color palette."
+            ),
+            bg=CARD, fg=MUTED, font=("TkDefaultFont", 9), wraplength=300,
+        )
+        self.theme_description.grid(row=1, column=1, sticky="w", padx=5, pady=(3, 0))
+        preview_heading = tk.Frame(appearance, bg=CARD)
+        preview_heading.pack(fill="x", padx=20, pady=(0, 7))
+        self.layout_preview_title = self.label(
+            preview_heading, f"DASHBOARD PREVIEW  /  {CURRENT_UI_STYLE.upper()}",
+            color=ACCENT, size=9, bold=True,
+        )
+        self.layout_preview_title.pack(anchor="w")
+        self.layout_preview = tk.Canvas(
+            appearance, bg=CARD_ALT, height=132, highlightthickness=1,
+            highlightbackground=BORDER,
+        )
+        self.layout_preview.pack(fill="x", padx=20, pady=(0, 18))
+        self.layout_preview.bind(
+            "<Configure>",
+            lambda event: self.draw_layout_preview(event.width, event.height),
+        )
         search = self.card(form)
         search.pack(fill="x", pady=(0, 12))
         self.section_heading(search, "DISCOVERY", "Choose a wallpaper source and search preferences.")
         grid = tk.Frame(search, bg=CARD)
         grid.pack(fill="x", padx=20, pady=(0, 18))
-        self.query_var = tk.StringVar(value=self.config.get("query", ""))
-        self.resolution_var = tk.StringVar(value=self.config.get("resolution", "1920x1080"))
-        self.ratio_var = tk.StringVar(value=self.config.get("ratio", "16x9,16x10,21x9"))
-        self.sort_var = tk.StringVar(value=self.config.get("sort", "random"))
-        self.top_range_var = tk.StringVar(value=self.config.get("top_range", "1M"))
+        self.query_var = tk.StringVar(value=self.config.get("query", DEFAULT_CONFIG["query"]))
+        self.resolution_var = tk.StringVar(
+            value=self.config.get("resolution", DEFAULT_CONFIG["resolution"])
+        )
+        self.ratio_var = tk.StringVar(value=self.config.get("ratio", DEFAULT_CONFIG["ratio"]))
+        self.sort_var = tk.StringVar(value=self.config.get("sort", DEFAULT_CONFIG["sort"]))
+        self.top_range_var = tk.StringVar(
+            value=self.config.get("top_range", DEFAULT_CONFIG["top_range"])
+        )
         saved_source = self.config.get("source", "wallhaven")
         self.source_var = tk.StringVar(
             value=SOURCE_LABELS.get(saved_source, SOURCE_LABELS["wallhaven"])
@@ -764,9 +1419,9 @@ class WallpaperManager:
         checks = tk.Frame(safe, bg=CARD)
         checks.pack(fill="x", padx=20, pady=(0, 16))
         self.purity_vars = self.add_checks(checks, "Content", ("SFW", "Sketchy", "NSFW"),
-                                           self.config.get("purity", "100"))
+                                           self.config.get("purity", DEFAULT_CONFIG["purity"]))
         self.category_vars = self.add_checks(checks, "Categories", ("General", "Anime", "People"),
-                                             self.config.get("categories", "111"))
+                                             self.config.get("categories", DEFAULT_CONFIG["categories"]))
         self.key_var = tk.StringVar(value=self.config.get("api_key", ""))
         key_frame = tk.Frame(safe, bg=CARD)
         key_frame.pack(fill="x", padx=20, pady=(0, 18))
@@ -792,8 +1447,12 @@ class WallpaperManager:
             for part in self.format_timer(self.config.get("timer", 30)).split(":")
         ]
         self.keep_var = tk.StringVar(value=str(self.config.get("keep", "5")))
+        self.max_log_size_var = tk.StringVar(
+            value=str(self.config.get("max_log_size", "1MB"))
+        )
         self.add_clock_input(controls, "Change every (HH:MM:SS)", self.timer_vars, 0, 0)
         self.add_entry(controls, "Keep downloaded images", self.keep_var, 0, 1)
+        self.add_entry(controls, "Maximum activity log size", self.max_log_size_var, 1, 0)
         self.save_dir_var = tk.StringVar(value=self.save_dir)
         folder_field = tk.Frame(rotation, bg=CARD)
         folder_field.pack(fill="x", padx=20, pady=(0, 16))
@@ -824,6 +1483,78 @@ class WallpaperManager:
         self.button(actions, "Start rotation", self.start_service).pack(side="left", padx=(9, 0))
         self.button(actions, "Stop rotation", self.stop_service).pack(side="left", padx=(9, 0))
         self.saved_preference_snapshot = self.preference_snapshot()
+
+    def draw_layout_preview(self, width=None, height=None):
+        canvas = getattr(self, "layout_preview", None)
+        if canvas is None or not canvas.winfo_exists():
+            return
+        width = width or canvas.winfo_width()
+        height = height or canvas.winfo_height()
+        if width < 100 or height < 60:
+            return
+
+        layouts = {
+            "Flat Design": (
+                ("WELCOME", 0, 0, .64, .29), ("ROTATION", .68, 0, .32, .29),
+                ("STATS", 0, .35, .32, .17), ("STATS", .34, .35, .32, .17),
+                ("STATS", .68, .35, .32, .17), ("LIBRARY", 0, .58, 1, .42),
+            ),
+            "Glassmorphism": (
+                ("WELCOME", 0, 0, 1, .25), ("ROTATION", 0, .31, .32, .28),
+                ("STATS", 0, .63, .32, .37), ("LIBRARY", .36, .31, .64, .69),
+            ),
+            "Neomorphism": (
+                ("WELCOME", 0, 0, .58, .38), ("ROTATION", .62, 0, .38, .38),
+                ("STATS", 0, .44, .32, .56), ("LIBRARY", .36, .44, .64, .56),
+            ),
+            "Bento Grid": (
+                ("WELCOME", 0, 0, .65, .39), ("ROTATION", .69, 0, .31, .39),
+                ("STATS", 0, .45, .32, .19), ("STATS", .34, .45, .32, .19),
+                ("STATS", .68, .45, .32, .19), ("LIBRARY", 0, .68, 1, .32),
+            ),
+            "Brutalism / Neo-Brutalism": (
+                ("WELCOME", 0, 0, 1, .25), ("LIBRARY", 0, .31, .62, .69),
+                ("ROTATION", .66, .31, .34, .29), ("STATS", .66, .64, .34, .36),
+            ),
+            "Dark Mode Design": (
+                ("LIBRARY", 0, 0, 1, .52), ("WELCOME", 0, .58, .53, .25),
+                ("ROTATION", .57, .58, .43, .25), ("STATS", 0, .87, 1, .13),
+            ),
+            "Skeuomorphism": (
+                ("WELCOME", 0, 0, .38, .28), ("ROTATION", 0, .34, .38, .28),
+                ("STATS", 0, .66, .38, .34), ("LIBRARY", .42, 0, .58, 1),
+            ),
+            "Retro-Futuristic / Cyberpunk": (
+                ("ROTATION", 0, 0, .58, .3), ("WELCOME", .62, 0, .38, .3),
+                ("LIBRARY", 0, .36, 1, .44), ("STATS", 0, .86, 1, .14),
+            ),
+        }
+        canvas.delete("all")
+        layout = layouts[CURRENT_UI_STYLE]
+        inset = 9
+        available_width = width - inset * 2
+        available_height = height - inset * 2
+        outline = "#111111" if CURRENT_UI_STYLE == "Brutalism / Neo-Brutalism" else BORDER
+        if CURRENT_UI_STYLE in ("Glassmorphism", "Retro-Futuristic / Cyberpunk"):
+            outline = ACCENT
+        line_width = 3 if CURRENT_UI_STYLE == "Brutalism / Neo-Brutalism" else 1
+        font = "TkFixedFont" if CURRENT_UI_STYLE == "Retro-Futuristic / Cyberpunk" else "TkDefaultFont"
+        for label, x, y, item_width, item_height in layout:
+            left = inset + x * available_width + 2
+            top = inset + y * available_height + 2
+            right = inset + (x + item_width) * available_width - 2
+            bottom = inset + (y + item_height) * available_height - 2
+            canvas.create_rectangle(
+                left, top, right, bottom, fill=CARD, outline=outline, width=line_width,
+            )
+            if right - left > 42 and bottom - top > 18:
+                canvas.create_text(
+                    left + 7, top + 6, anchor="nw", text=label,
+                    fill=contrast_safe_color(
+                        ACCENT if label == "WELCOME" else MUTED, CARD
+                    ),
+                    font=(font, 8, "bold"),
+                )
 
     def section_heading(self, parent, title, subtitle):
         self.label(parent, title, color=ACCENT, size=9, bold=True).pack(anchor="w", padx=20, pady=(16, 4))
@@ -984,8 +1715,105 @@ class WallpaperManager:
         parent.grid_columnconfigure(column, weight=1)
         tk.Label(field, text=title, bg=CARD, fg=MUTED,
                  font=("TkDefaultFont", 9)).pack(anchor="w", pady=(0, 6))
-        ttk.Combobox(field, textvariable=variable, values=values,
-                     state="readonly").pack(fill="x")
+        combo = ttk.Combobox(field, textvariable=variable, values=values,
+                             state="readonly")
+        combo.pack(fill="x")
+        return combo
+
+    def apply_selected_theme(self, _event=None):
+        selected = self.theme_var.get()
+        selected_style = self.ui_style_var.get()
+        if selected not in THEME_PALETTES or selected_style not in UI_STYLE_NAMES:
+            return
+        color_names = (
+            "BG", "SIDEBAR", "CARD", "CARD_ALT", "ACCENT", "ACTIVE_PRIMARY",
+            "PRIMARY_TEXT", "CYAN", "TEXT", "MUTED", "BORDER",
+        )
+        previous_colors = {name: globals()[name] for name in color_names}
+        set_ui_style(selected_style)
+        set_theme_palette(selected)
+        color_map = {
+            previous_colors[name]: globals()[name]
+            for name in color_names
+        }
+        border_color = UI_STYLE_BORDER_COLORS.get(selected_style, BORDER)
+        if border_color == "accent":
+            border_color = ACCENT
+
+        def recolor(widget):
+            for option in (
+                "bg", "fg", "activebackground", "activeforeground",
+                "highlightbackground", "highlightcolor", "insertbackground",
+                "selectbackground", "selectcolor", "troughcolor",
+            ):
+                try:
+                    old_color = widget.cget(option)
+                    new_color = color_map.get(old_color)
+                    if new_color is not None:
+                        widget.configure(**{option: new_color})
+                except tk.TclError:
+                    continue
+            for child in widget.winfo_children():
+                recolor(child)
+            if getattr(widget, "_wallpaper_card", False):
+                relief, border_width, highlight_width = UI_STYLE_CARD_STYLES.get(
+                    selected_style, ("flat", 0, 0)
+                )
+                widget.configure(
+                    relief=relief, bd=border_width,
+                    highlightthickness=highlight_width,
+                    highlightbackground=border_color,
+                )
+            elif getattr(widget, "_wallpaper_button", False):
+                relief, border_width = UI_STYLE_BUTTON_STYLES.get(
+                    selected_style, ("flat", 0)
+                )
+                highlight_width = 1 if selected_style in (
+                    "Glassmorphism", "Skeuomorphism", "Retro-Futuristic / Cyberpunk"
+                ) else 0
+                widget.configure(
+                    relief=relief, bd=border_width,
+                    highlightthickness=highlight_width,
+                    highlightbackground=border_color,
+                )
+
+        recolor(self.root)
+        self.root.configure(bg=BG)
+        self.configure_styles()
+        self.apply_contrast_to_tree(self.root)
+        for name, button in self.nav_buttons.items():
+            self.style_navigation_button(button, name == self.page)
+        if hasattr(self, "theme_description") and self.theme_description.winfo_exists():
+            self.theme_description.configure(
+                text=THEME_DESCRIPTIONS.get(selected, f"{selected.title()} color palette.")
+            )
+        if hasattr(self, "ui_style_description") and self.ui_style_description.winfo_exists():
+            self.ui_style_description.configure(text=UI_STYLE_DESCRIPTIONS[selected_style])
+        if hasattr(self, "layout_preview_title") and self.layout_preview_title.winfo_exists():
+            self.layout_preview_title.configure(
+                text=f"DASHBOARD PREVIEW  /  {selected_style.upper()}"
+            )
+        if hasattr(self, "layout_preview") and self.layout_preview.winfo_exists():
+            self.draw_layout_preview()
+
+    def persist_theme(self):
+        theme = self.theme_var.get()
+        if theme not in THEME_PALETTES:
+            raise ValueError(f"Unknown color theme: {theme}")
+        ui_style = self.ui_style_var.get()
+        if ui_style not in UI_STYLE_NAMES:
+            raise ValueError(f"Unknown UI style: {ui_style}")
+        config = self.load_config()
+        config["theme"] = theme
+        config["ui_style"] = ui_style
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        temporary_file = CONFIG_FILE + ".tmp"
+        try:
+            with open(temporary_file, "w", encoding="utf-8") as config_file:
+                json.dump(config, config_file, indent=4)
+            os.replace(temporary_file, CONFIG_FILE)
+        except OSError as error:
+            raise RuntimeError(f"Could not save the color theme: {error}") from error
 
     def add_checks(self, parent, title, labels, value):
         frame = tk.Frame(parent, bg=CARD)
@@ -1065,6 +1893,7 @@ class WallpaperManager:
             raise ValueError(
                 "Enter rotation time as HH:MM:SS (for example, 00:30:00) and image count as a whole number."
             ) from error
+        log_size = self.parse_log_size(self.max_log_size_var.get())
         if keep < 0:
             raise ValueError("Image count cannot be negative.")
         purity = "".join("1" if self.purity_vars[name].get() else "0"
@@ -1096,8 +1925,22 @@ class WallpaperManager:
             ("--pixabay-key", self.pixabay_key_var.get().strip()),
             ("--timer", str(timer)),
             ("--keep", str(keep)),
+            ("--max-log-size", log_size),
             ("--save-dir", save_dir),
         ]
+
+    @staticmethod
+    def parse_log_size(value):
+        size = value.strip().upper()
+        match = re.fullmatch(r"(\d+(?:\.\d+)?)\s*(B|KB|MB|GB)?", size)
+        if not match:
+            raise ValueError("Log size must be a number with optional B, KB, MB, or GB units.")
+        amount = float(match.group(1))
+        unit = match.group(2) or "MB"
+        multipliers = {"B": 1, "KB": 1024, "MB": 1024 ** 2, "GB": 1024 ** 3}
+        if amount <= 0 or amount * multipliers[unit] < 1:
+            raise ValueError("Maximum activity log size must be at least 1 byte.")
+        return value.strip()
 
     @staticmethod
     def parse_timer(value):
@@ -1132,6 +1975,12 @@ class WallpaperManager:
             return
         args = [part for key, value in options for part in (key, value)] + ["--set"]
         def done(_output):
+            try:
+                self.persist_theme()
+            except (OSError, RuntimeError, ValueError) as error:
+                self.status_text.set("Wallpaper preferences saved; appearance not saved")
+                messagebox.showerror("Could not save appearance", str(error), parent=self.root)
+                return
             self.config = self.load_config()
             self.save_dir = os.path.abspath(os.path.expanduser(
                 str(self.config.get("save_dir", SAVE_DIR))
@@ -1221,11 +2070,26 @@ class WallpaperManager:
             self.status_text.set("Wallpaper updated")
 
     def save_service_settings(self):
+        appearance_saved = True
+        try:
+            self.persist_theme()
+        except (OSError, RuntimeError, ValueError) as error:
+            appearance_saved = False
+            self.status_text.set("Rotation started; appearance not saved")
+            messagebox.showerror("Could not save appearance", str(error), parent=self.root)
         self.config = self.load_config()
         self.save_dir = os.path.abspath(os.path.expanduser(
             str(self.config.get("save_dir", SAVE_DIR))
         ))
         self.saved_preference_snapshot = self.preference_snapshot()
+        if not appearance_saved:
+            self.saved_preference_snapshot = (
+                self.saved_preference_snapshot[:-2]
+                + (
+                    self.config.get("ui_style", "Flat Design"),
+                    self.config.get("theme", "forest"),
+                )
+            )
         self.set_service_state(True)
 
     def refresh_service(self):
@@ -1252,7 +2116,9 @@ class WallpaperManager:
         self.service_check_running = False
         if hasattr(self, "service_text"):
             self.service_text.set("Running" if running else "Not running")
-            self.service_label.configure(fg=ACCENT if running else MUTED)
+            self.service_label.configure(
+                fg=contrast_safe_color(ACCENT if running else MUTED, CARD)
+            )
         if error:
             self.status_text.set(error)
 

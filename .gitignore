@@ -1,59 +1,52 @@
-# Python
-__pycache__/
-**/__pycache__/
-*.py[cod]
-*.pyo
-*.pyd
-*.egg-info/
-.eggs/
-.venv/
-venv/
-env/
-
-# Editors / OS
-.vscode/
-.idea/
-.DS_Store
-Thumbs.db
-*.swp
-*.swo
-*~
-
-# Project-local runtime files
+# Local settings and runtime data (may contain API keys)
 config.json
 wallpaper.log
 wallpaper.pid
 reload.flag
 *.log
 *.pid
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Android and Gradle
+.gradle/
+.kotlin/
+local.properties
+*.iml
+Android/build/
+Android/app/build/
+
+# Windows packaging
+/dist/
+/Windows/build-output/
+
+# Other generated build output
+/build/
+/out/
+*.class
+
+# Temporary and backup files
 *.tmp
 *.bak
 *.orig
+*.swp
+*.swo
+*~
 
-# Build / packaging artifacts
-build/
-dist/
-out/
-*.apk
-*.aab
-*.exe
-*.zip
-*.tar.gz
-*.whl
-*.class
-
-# Android / Gradle
-Android/.gradle/
-Android/**/build/
-Android/**/*.iml
-Android/local.properties
-Android/.idea/
-Android/.kotlin/
-
-# Windows/Linux local generated files
-Windows/__pycache__/
-Linux/__pycache__/
-**/.pytest_cache/
-
-# Windows packaging output
-/Windows/build-output/
+# Editors and operating systems
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
