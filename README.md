@@ -159,7 +159,7 @@ asks whether to remove your settings and logs.
 
 ## Windows installation
 
-The current desktop release is **1.0.0.3**. Download
+The current desktop release is **1.0.0.4**. Download
 **WS-Wallpaper-Setup.exe** from
 [GitHub Releases](https://github.com/Wasib-2005/WS-Wallpaper/releases/latest)
 and run it. The per-user installer does not require administrator access.
